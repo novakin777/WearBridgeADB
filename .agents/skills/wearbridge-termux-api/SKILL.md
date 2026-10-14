@@ -10,8 +10,8 @@ Use this skill when a user asks to inspect or control the paired watch from Term
 ## Setup once
 
 1. Find the WearBridge checkout and use its `scripts/wadb` client.
-2. On the phone, open WearBridge Settings, enable **TERMUX API**, and tap **Copy API token**.
-3. In Termux, run `./scripts/wadb configure` and paste the token into its hidden prompt. It saves the token in `${XDG_CONFIG_HOME:-$HOME/.config}/wearbridgeadb/token` with mode `600`. Phone root and the separate Termux:API plugin are not required. `WADB_TOKEN` can supply the token from an already-secured environment instead.
+2. Ask the user to manually copy the bearer token: on the phone, open WearBridge Settings, enable **TERMUX API**, and tap **Copy API token**. The user then pastes it into the CLI prompt. The assistant must not read app-private files, inspect the clipboard, or try to retrieve/copy the token itself.
+3. In Termux, run `./scripts/wadb configure`; the user pastes the copied token into its hidden prompt. It saves the token in `${XDG_CONFIG_HOME:-$HOME/.config}/wearbridgeadb/token` with mode `600`. `wadb` runs as the ordinary phone user and does not need phone root; most phones are not rooted. The separate Termux:API plugin is not required. `WADB_TOKEN` can supply the token from an already-secured environment instead.
 4. Check availability with `./scripts/wadb status`.
 
 Do not read or print the token, include it in command output, or put it in logs. If the API is stopped or unavailable, ask the user to enable it in WearBridge Settings. The service authenticates with a bearer token and binds only to `127.0.0.1:18765` on the phone; do not forward it to LAN/Wi-Fi or `0.0.0.0`.
