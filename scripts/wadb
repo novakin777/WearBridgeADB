@@ -1,0 +1,66 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+config_dir="${XDG_CONFIG_HOME:-${HOME:?HOME is not set}/.config}/wearbridgeadb"
+token_file="$config_dir/token"
+
+if [[ "${1:-}" == configure ]]; then
+  printf 'Paste the API token copied from WearBridge Settings: '
+  IFS= read -r -s token
+  printf '\n'
+  if [[ ! "$token" =~ ^[A-Za-z0-9_-]{40,}$ ]]; then
+    echo "Invalid token format." >&2
+    exit 2
+  fi
+  mkdir -p "$config_dir"
+  chmod 700 "$config_dir"
+  umask 077
+  printf '%s\n' "$token" > "$token_file"
+  chmod 600 "$token_file"
+  echo "WearBridge API token saved in $token_file"
+  exit 0
+fi
+
+if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+  echo "Usage: wadb [--shell|--root] COMMAND..."
+  echo "       wadb status"
+  echo "       wadb configure   Save the token copied from WearBridge Settings"
+  exit 0
+fi
+
+mode=shell
+if [[ "${1:-}" == --root ]]; then mode=root; shift
+elif [[ "${1:-}" == --shell ]]; then mode=shell; shift
+fi
+
+token="${WADB_TOKEN:-}"
+if [[ -z "$token" && -r "$token_file" ]]; then token="$(<"$token_file")"; fi
+if [[ ! "$token" =~ ^[A-Za-z0-9_-]{40,}$ ]]; then
+  echo "No API token configured. Enable Termux API in WearBridge Settings, tap Copy API token, then run: wadb configure" >&2
+  exit 1
+fi
+
+umask 077
+auth_config="$(mktemp)"
+trap 'unlink "$auth_config" >/dev/null 2>&1 || true' EXIT
+printf 'header = "Authorization: Bearer %s"\n' "$token" > "$auth_config"
+unset token
+
+if [[ "${1:-}" == status ]]; then
+  shift
+  curl --silent --show-error --config "$auth_config" \
+    http://127.0.0.1:18765/v1/status
+  exit $?
+fi
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: wadb [--shell|--root] COMMAND..." >&2
+  echo "       wadb status" >&2
+  exit 2
+fi
+
+command_text="$*"
+curl --silent --show-error --config "$auth_config" --get \
+  --data-urlencode "mode=$mode" \
+  --data-urlencode "command=$command_text" \
+  http://127.0.0.1:18765/v1/exec

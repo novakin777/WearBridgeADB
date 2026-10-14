@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.wearbrdgeadb">
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+ <uses-permission android:name="android.permission.INTERNET" />
+ <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+ <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+ <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+ <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+ <uses-feature android:name="android.hardware.type.watch" />
+ <application android:allowBackup="false" android:icon="@mipmap/ic_launcher" android:label="WearBridgeADB" android:theme="@style/WearBridgeTheme">
+  <meta-data android:name="com.google.android.wearable.standalone" android:value="false" />
+  <meta-data android:name="com.google.android.gms.version" android:value="@integer/google_play_services_version" />
+  <provider android:name="rikka.shizuku.ShizukuProvider" android:authorities="${applicationId}.shizuku" android:enabled="true" android:exported="true" android:multiprocess="false" />
+  <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+  <service android:name=".DataLayerListenerService" android:exported="true">
+   <intent-filter><action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED"/><data android:scheme="wear" android:host="*" android:pathPrefix="/exec"/></intent-filter>
+   <intent-filter><action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED"/><data android:scheme="wear" android:host="*" android:path="/terminal/resize"/></intent-filter>
+   <intent-filter><action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED"/><data android:scheme="wear" android:host="*" android:pathPrefix="/file-transfer/"/></intent-filter>
+   <intent-filter><action android:name="com.google.android.gms.wearable.CHANNEL_EVENT"/><data android:scheme="wear" android:host="*" android:pathPrefix="/terminal"/></intent-filter>
+  </service>
+ </application>
+</manifest>

@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Safe-zone bridge mark: two linked endpoints and a compact shell prompt. -->
+    <path android:pathData="M27,57 C31,28 77,28 81,57" android:fillColor="#00000000" android:strokeColor="#A8E6C5" android:strokeWidth="7" android:strokeLineCap="round" />
+    <path android:pathData="M27,59 L27,70 M81,59 L81,70" android:fillColor="#00000000" android:strokeColor="#80C9D7" android:strokeWidth="6" android:strokeLineCap="round" />
+    <path android:pathData="M40,72 L50,80 L40,88 M56,88 L69,88" android:fillColor="#00000000" android:strokeColor="#E9F1EF" android:strokeWidth="5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M27,56 m-6,0 a6,6 0,1 0,12 0 a6,6 0,1 0,-12 0 M81,56 m-6,0 a6,6 0,1 0,12 0 a6,6 0,1 0,-12 0" android:fillColor="#80C9D7" />
+</vector>

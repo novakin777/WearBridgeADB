@@ -1,0 +1,44 @@
+# Local signing material and generated APKs
+/keys/
+/phone/output/
+/wear/output/
+*.apk
+*.aab
+
+# Android and Kotlin build state
+**/build/
+**/.gradle/
+**/.kotlin/
+**/local.properties
+
+# Phone-only experiments and device/build artifacts
+/sensor-probe/
+/toolchain/
+/bases/
+/backup/
+/source/SimpleWear-1.17.0_release/
+/source/WearBridgeADB/.idea/
+/source/WearBridgeADB/captures/
+/wear/output/
+/phone/output/
+/WearBridgeADB-source-*.tar.gz
+/gradle-thread-dump*.txt
+/apksigner.jar
+
+# Local agent state, device logs and credentials
+/.wolf/
+/.codex/
+/.claude/
+/.agents/
+/.github-local/
+/shizuku-api-latest.json
+/simplewear-release.json
+
+# Native PTY libraries are generated from source by scripts/build-native-pty.sh
+**/jniLibs/**/*.so
+# Preserve local decoded/analyzed work outputs without tracking them
+
+# Local agent instructions and external backup inventory
+/AGENTS.md
+/CLAUDE.md
+/SOURCE-BACKUP-LOCATIONS.txt

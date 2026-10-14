@@ -1,0 +1,15 @@
+<resources>
+    <color name="wb_canvas">#0B1215</color>
+    <color name="wb_surface">#121D20</color>
+    <color name="wb_surface_raised">#1B2A2D</color>
+    <color name="wb_console">#081012</color>
+    <color name="wb_on_surface">#E9F1EF</color>
+    <color name="wb_on_surface_variant">#A9BCB8</color>
+    <color name="wb_primary">#A8E6C5</color>
+    <color name="wb_on_primary">#092018</color>
+    <color name="wb_secondary">#80C9D7</color>
+    <color name="wb_success">#8ED5A7</color>
+    <color name="wb_warning">#F2C47E</color>
+    <color name="wb_error">#FF9C96</color>
+    <color name="wb_outline">#304246</color>
+</resources>
