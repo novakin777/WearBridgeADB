@@ -40,11 +40,9 @@ cd ~/wearbrdgeadb
 - `phone/output/wearbridgeadb-phone.apk`
 - `wear/output/wearbridgeadb-wear.apk`
 
-Подпись сделана через локальный `apksigner.jar` и `keys/wearbridge-project.p12`. Пароль находится в `keys/signing.env` (режим файла 600); не публикуйте этот файл или keystore. Оба APK прошли `apksigner verify`; SHA-256 сертификата: `ffaf5095b044803a5c90c33aedec9e5883028ccd73e5f536b217b3cb98a22ade`.
-
 ## GitHub Actions
 
-`.github/workflows/android-build.yml` собирает phone и Wear debug APK на push в `main`, pull request и по ручному запуску. Результаты доступны как workflow artifacts в GitHub Actions в течение 14 дней. CI использует временный Android debug key; эти APK предназначены для проверки сборки и не обновляют установленную локально подписанную версию без удаления приложения. Keystore и пароль локальной подписи в репозиторий не входят.
+`.github/workflows/android-build.yml` собирает phone и Wear debug APK на push в `main`, pull request и по ручному запуску. Результаты доступны как workflow artifacts в GitHub Actions в течение 14 дней. CI использует временный Android debug key; эти APK предназначены для проверки сборки и не обновляют установленную локально подписанную версию без удаления приложения.
 
 ## Установка и первый запуск
 

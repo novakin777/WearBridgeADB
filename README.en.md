@@ -35,11 +35,9 @@ Outputs:
 - `phone/output/wearbridgeadb-phone.apk`
 - `wear/output/wearbridgeadb-wear.apk`
 
-Local signing uses `apksigner.jar` and `keys/wearbridge-project.p12`. The password is in `keys/signing.env` (file mode 600). Never commit the keystore or password.
-
 ## GitHub Actions
 
-`.github/workflows/android-build.yml` builds both debug APKs on pushes to `main`, pull requests, or manual dispatch. Artifacts are retained for 14 days. CI uses a temporary Android debug signing key. These APKs are for build verification and cannot update a locally signed install without uninstalling it first. Local signing credentials are not stored in the repository.
+`.github/workflows/android-build.yml` builds both debug APKs on pushes to `main`, pull requests, or manual dispatch. Artifacts are retained for 14 days. CI uses a temporary Android debug signing key. These APKs are for build verification and cannot update a locally signed install without uninstalling it first.
 
 ## Install and first run
 
