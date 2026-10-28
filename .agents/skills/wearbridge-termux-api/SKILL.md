@@ -9,31 +9,36 @@ Use this skill when a user asks to inspect or control the paired watch from Term
 
 ## Setup once
 
-If the user does not already have the WearBridge checkout in Termux, give these exact commands:
+If the standalone `wadb` command is not installed, do not clone the whole repository. Give these Termux commands to install only the client:
 
 ```sh
+set -e
 pkg update
-pkg install git curl
-cd ~
-git clone https://github.com/novakin777/WearBridgeADB.git
-cd ~/WearBridgeADB
+pkg install curl jq coreutils gawk grep
+mkdir -p "$PREFIX/bin"
+tmp="$(mktemp "$PREFIX/bin/.wadb.XXXXXX")"
+curl -fsSL --retry 3 https://raw.githubusercontent.com/novakin777/WearBridgeADB/main/scripts/wadb -o "$tmp"
+bash -n "$tmp"
+chmod 700 "$tmp"
+mv -f "$tmp" "$PREFIX/bin/wadb"
+wadb --help
 ```
 
-If `~/WearBridgeADB` already exists, skip `git clone` and just run `cd ~/WearBridgeADB`.
+To update, repeat the full installation block. The client is a Termux Bash script and does not need the repository checkout.
 
 1. On the phone, open WearBridge Settings, turn **TERMUX API** on, and tap **Copy API token**. The user copies the bearer token themselves. Never read app-private files, inspect the clipboard, or retrieve/copy the token for them.
-2. In Termux, from the repository root, run:
+2. In Termux, run:
 
    ```sh
-   ./scripts/wadb configure
+   wadb configure
    ```
 
-   The user long-presses the prompt and pastes the token, then presses Enter. Explain that the pasted characters are hidden; this is expected. The command saves the token to `${XDG_CONFIG_HOME:-$HOME/.config}/wearbridgeadb/token` with mode `600`, where `scripts/wadb` reads it automatically. Do not put the token in chat, command arguments, shell history, logs, or repository files.
+   The user long-presses the prompt and pastes the token, then presses Enter. Explain that the pasted characters are hidden; this is expected. The command saves the token to `${XDG_CONFIG_HOME:-$HOME/.config}/wearbridgeadb/token` with mode `600`, where the standalone `wadb` command reads it automatically. Do not put the token in chat, command arguments, shell history, logs, or repository files.
 3. Confirm setup:
 
    ```sh
-   ./scripts/wadb status
-   ./scripts/wadb --shell id
+   wadb status
+   wadb --shell id
    ```
 
 `wadb` runs as the ordinary phone user and does not need phone root; most phones are not rooted. The separate Termux:API Android plugin is not required. `WADB_TOKEN` can supply the token from an already-secured environment instead.
@@ -45,22 +50,22 @@ Do not read or print the token, include it in command output, or put it in logs.
 Always select the watch execution profile explicitly:
 
 ```sh
-./scripts/wadb --shell 'id'
-./scripts/wadb --shell 'getprop ro.build.fingerprint'
-./scripts/wadb --root 'id'
-./scripts/wadb --root 'dumpsys battery'
+wadb --shell 'id'
+wadb --shell 'getprop ro.build.fingerprint'
+wadb --root 'id'
+wadb --root 'dumpsys battery'
 ```
 
 Choose execution and privilege independently. `--normal` runs exactly one command (default); `--stream` explicitly opens a persistent interactive PTY from Termux, optionally with an initial command. Never infer the mode from a command name: `logcat` remains NORMAL unless `--stream` was selected. In STREAM, terminal bytes and controls go to the open PTY; Ctrl+C/D/Z and arrow keys are forwarded, while Ctrl+] closes the CLI and remote PTY. The CLI requires an interactive TTY for STREAM. Use `--shell` by default. Use `--root` only when the user explicitly requests root-level execution or confirms it for the current task. ROOT means root on the watch; it does not mean root in Termux or on the phone.
 
 Treat command text as executable input, quote it as one shell argument, and report the actual response. There is almost no protection against operator mistakes: commands execute directly on the watch, and ROOT can change or delete system data. Do not run destructive commands, modify boot/system partitions, or chain unrelated commands unless the user explicitly asked for that exact operation.
 
-`./scripts/wadb status` checks phone API readiness and paired watch connectivity. A successful phone HTTP response does not prove a watch command succeeded; inspect the command result. For ADB-started Shizuku, `--shell id` should report `uid=2000(shell)`. Watch-side ROOT is confirmed only by the command result reporting `uid=0(root)`.
+`wadb status` checks phone API readiness and paired watch connectivity. A successful phone HTTP response does not prove a watch command succeeded; inspect the command result. For ADB-started Shizuku, `--shell id` should report `uid=2000(shell)`. Watch-side ROOT is confirmed only by the command result reporting `uid=0(root)`.
 
 When the user explicitly requests installation of an APK already on the watch, run:
 
 ```sh
-./scripts/wadb install /sdcard/Download/example.apk
+wadb install /sdcard/Download/example.apk
 ```
 
 This convenience command always uses Shizuku SHELL and executes `pm install -r`, regardless of a preceding `--root`. If the APK is phone-local, use the CLI `push` command below first. STREAM is the interactive PTY, not a file-transfer channel.
@@ -72,8 +77,8 @@ This convenience command always uses Shizuku SHELL and executes `pm install -r`,
 Capture a bounded logcat scenario with an explicit filter:
 
 ```sh
-./scripts/wadb capture-logcat --duration 30 --tag WearBridge
-./scripts/wadb capture-logcat --duration 60 --pid 1234 --output "$HOME/storage/downloads/watch-run.log"
+wadb capture-logcat --duration 30 --tag WearBridge
+wadb capture-logcat --duration 60 --pid 1234 --output "$HOME/storage/downloads/watch-run.log"
 ```
 
 Exactly one of `--tag` or `--pid` is required. Duration is limited to 1–300 seconds. Capture runs as an async SHELL job using the watch's `/system/bin/timeout`; it sends SIGINT at the requested duration and escalates to SIGKILL after a 2-second grace period if logcat does not exit. The phone-side wait allows up to 120 seconds for delayed Shizuku startup plus the capture duration and result-delivery margin; if that window expires, it requests job cancellation and reports the job ID. On completion, it saves the returned log on the phone (Termux `storage/downloads` when available, otherwise the WearBridge state directory). The API caps each job's combined output at 2 MiB; check the printed truncation warning. A filtered log can still contain private data, so keep the file local and remove it when no longer needed.
@@ -81,22 +86,22 @@ Exactly one of `--tag` or `--pid` is required. Duration is limited to 1–300 se
 Install an APK from the phone in one SHELL-only operation:
 
 ```sh
-./scripts/wadb install-local --package dev.example.app ./app-release.apk
+wadb install-local --package dev.example.app ./app-release.apk
 ```
 
 The package id is required because this Termux installation has no bundled APK metadata reader. The helper uploads to a unique temporary path under `/data/local/tmp` over Data Layer by default (or accepts `--wifi`), checks local and watch SHA-256 values, runs `pm install -r`, confirms `versionName` and `pm path`, then removes the temporary watch copy. `/sdcard/Download` can be unreadable to `system_server` on this watch's FUSE-backed storage. If an intermediate step is indeterminate or verification fails, the helper leaves the uploaded APK on watch and prints its exact path for inspection; do not blindly retry an install after an API timeout.
 
 ## Long-running commands
 
-For a synchronous NORMAL request, `wadb` prints a `requestId` before sending it. Ctrl+C attempts remote cancellation; if the client is killed or interrupted separately, run `./scripts/wadb cancel REQUEST_ID` from another Termux session. The cancel endpoint confirms dispatch only; check the request's final result when available. SHELL and ROOT command cancellation uses a dedicated `setsid` process group when supported. ROOT NORMAL commands require `/system/bin/setsid`, have a 120-second execution ceiling, and send TERM then KILL to the whole group on cancellation or timeout; without `setsid`, ROOT execution is rejected before the command starts. For async jobs, use `./scripts/wadb job cancel JOB_ID`; queued jobs become cancelled without being sent to the watch, while running jobs receive a watch-side cancellation message. Treat `cancel_requested` as pending, not proof of termination.
+For a synchronous NORMAL request, `wadb` prints a `requestId` before sending it. Ctrl+C attempts remote cancellation; if the client is killed or interrupted separately, run `wadb cancel REQUEST_ID` from another Termux session. The cancel endpoint confirms dispatch only; check the request's final result when available. SHELL and ROOT command cancellation uses a dedicated `setsid` process group when supported. ROOT NORMAL commands require `/system/bin/setsid`, have a 120-second execution ceiling, and send TERM then KILL to the whole group on cancellation or timeout; without `setsid`, ROOT execution is rejected before the command starts. For async jobs, use `wadb job cancel JOB_ID`; queued jobs become cancelled without being sent to the watch, while running jobs receive a watch-side cancellation message. Treat `cancel_requested` as pending, not proof of termination.
 
 Use an asynchronous job when a command may exceed the synchronous 120-second HTTP wait:
 
 ```sh
-./scripts/wadb --shell --async 'am instrument -w PACKAGE/TEST_RUNNER'
-./scripts/wadb job status JOB_ID
-./scripts/wadb job output JOB_ID
-./scripts/wadb job cancel JOB_ID
+wadb --shell --async 'am instrument -w PACKAGE/TEST_RUNNER'
+wadb job status JOB_ID
+wadb job output JOB_ID
+wadb job cancel JOB_ID
 ```
 
 The async call returns a `jobId`; poll status and fetch output separately. Status includes `stage` and `lastActivityAt` alongside `updatedAt`: `updatedAt` tracks job-state changes, while the additional fields expose bridge phase transitions. This is not a live-output heartbeat. Output is collected when the command finishes rather than exposed as a live tail. `job output` prints the saved JSON and writes a copy under `${XDG_STATE_HOME:-$HOME/.local/state}/wearbridgeadb/jobs/`. The phone app also persists job records in its private storage. Wear 1.32 allows up to three concurrent SHELL NORMAL commands and caps watch stdout and stderr at 1 MiB each; excess work is rejected instead of queued, and the response marks truncated output. ROOT work uses the same three-command cap. File-copy error capture is capped at 64 KiB. SHELL and ROOT NORMAL waits and reader joins are bounded; ROOT timeout returns exit code 124. A cancellation message acknowledgement is not proof of termination: check for a terminal job state and use a fresh watch trace if it remains pending.
@@ -118,9 +123,9 @@ Wear resource-retention rules: close Wear ChannelClient input/output streams bef
 To verify natural timer completion, use a short command that emits a marker after the timer, then check both the terminal job state and output; for example:
 
 ```sh
-./scripts/wadb --shell --async 'echo TIMER_START; sleep 8; echo TIMER_DONE'
-./scripts/wadb job status JOB_ID
-./scripts/wadb job output JOB_ID
+wadb --shell --async 'echo TIMER_START; sleep 8; echo TIMER_DONE'
+wadb job status JOB_ID
+wadb job output JOB_ID
 ```
 
 Expected result is `state=completed`, `exitCode=0`, and both markers. Do not use a successful cancel as proof that a timer fired. In tracing, compare watch `message_received`/`deviceIdle` with `exec_wakelock_acquired`, `backend_ready`, `exec_start`, `exec_finished`, and `exec_wakelock_released`. Shizuku bind delay before `exec_start` is distinct from a process that remains alive after `exec_start`. On Wear 1.29 one runtime `sleep 8` test completed naturally with both markers and exit code 0; that run did not confirm whether Doze was active, so it is not a controlled Doze-specific validation.
@@ -134,8 +139,8 @@ Shizuku UserService acquisition has a bounded 15-second caller wait. If a trace 
 Use the Wear Data Layer asset path for files; it does not open a LAN socket or require watch Wi-Fi:
 
 ```sh
-./scripts/wadb --shell push ./app.apk /sdcard/Download/app.apk
-./scripts/wadb --root pull /sdcard/Download/log.txt ./log.txt
+wadb --shell push ./app.apk /sdcard/Download/app.apk
+wadb --root pull /sdcard/Download/log.txt ./log.txt
 ```
 
 `push` takes a phone-local source and absolute watch destination; it replaces a file at that destination. `pull` takes an absolute watch source and a phone destination; it refuses to overwrite an existing phone file and requires its parent directory to exist. The 1 GiB limit is only the implementation's hard request cap; it is not a measured or recommended Bluetooth transfer size. A Wear Data Layer `Asset` supports data larger than the roughly 100 KB `DataItem` payload limit, but that does not establish a safe throughput or file-size limit for a particular watch. Do not run file transfers concurrently with other Data Layer work while diagnosing congestion. Measure one transfer at a time, recording byte count and elapsed time, and increase the test size only after the previous transfer has completed and the watch UI remains responsive. Stop on a prolonged `Loading` screen, loss of connection, or timeout. A client-side interrupt does not prove that the watch-side transfer was cancelled; the phone implementation can keep waiting for a transfer response for up to 10 minutes, so do not immediately retry or start another transfer. `--shell` uses the Shizuku UserService shell identity; select `--root` only when explicitly requested. Wear OS chooses the available Data Layer transport; Bluetooth should be sufficient with Wi-Fi disabled while the paired connection remains available. The existing in-app Files transfer flow may still use its separate Wi-Fi transport.
@@ -143,22 +148,22 @@ Use the Wear Data Layer asset path for files; it does not open a LAN socket or r
 ## Timeouts and diagnostics
 
 - Synchronous `/v1/exec` waits up to 120 seconds. A timeout is indeterminate: it does not show whether the watch command started or finished. Do not automatically retry, especially `am instrument`, APK installs, or commands that create temporary files. Before retrying, make short read-only requests to check the specific process, known temporary/result files, and relevant `logcat` tags. If the result remains ambiguous, report that and ask before retrying. Prefer async jobs for long operations, but still inspect status/output rather than resubmitting the command.
-- For PackageManager checks, target one package (for example `./scripts/wadb --shell 'dumpsys package com.example.target'`) and filter only needed fields. Avoid broad `dumpsys package` or whole-system dumps through synchronous `/v1/exec`; they can exceed the timeout.
-- After a WearBridge update or watch reboot, recheck live state: `./scripts/wadb status`, `./scripts/wadb --root 'id'` if ROOT matters, the exact permission grant, and `./scripts/wadb --shell 'cmd deviceidle whitelist'`. Do not treat older output as current proof.
+- For PackageManager checks, target one package (for example `wadb --shell 'dumpsys package com.example.target'`) and filter only needed fields. Avoid broad `dumpsys package` or whole-system dumps through synchronous `/v1/exec`; they can exceed the timeout.
+- After a WearBridge update or watch reboot, recheck live state: `wadb status`, `wadb --root 'id'` if ROOT matters, the exact permission grant, and `wadb --shell 'cmd deviceidle whitelist'`. Do not treat older output as current proof.
 - Prefer the watch UI's battery-optimization status and user confirmation prompt. Change the device-idle whitelist only on an explicit user request. Check whether the package was already listed first; add it only if absent and remove it only if this task added it. Example:
 
   ```sh
   pkg=dev.wearbrdgeadb
-  ./scripts/wadb --shell 'cmd deviceidle whitelist'
-  ./scripts/wadb --shell "cmd deviceidle whitelist +$pkg"
-  ./scripts/wadb --shell 'cmd deviceidle whitelist'
+  wadb --shell 'cmd deviceidle whitelist'
+  wadb --shell "cmd deviceidle whitelist +$pkg"
+  wadb --shell 'cmd deviceidle whitelist'
   # Roll back only if it was absent before this change:
-  ./scripts/wadb --shell "cmd deviceidle whitelist -$pkg"
-  ./scripts/wadb --shell 'cmd deviceidle whitelist'
+  wadb --shell "cmd deviceidle whitelist -$pkg"
+  wadb --shell 'cmd deviceidle whitelist'
   ```
 
   The app's `PowerManager.isIgnoringBatteryOptimizations()` status and the `cmd deviceidle` whitelist are related but distinct; state which check was actually performed.
 
 ## API details
 
-Prefer `scripts/wadb`; it handles bearer auth and URL encoding, keeps the token in a mode-600 temporary curl config instead of process arguments, and removes that file when the command exits. The API exposes `/v1/status`, `/v1/exec`, `/v1/exec/cancel`, `/v1/jobs/status`, `/v1/jobs/output`, `/v1/jobs/cancel`, `/v1/files/push`, `/v1/files/pull`, and `/v1/stream/{open,input,output,resize,close}`. The command limit is 65536 UTF-8 bytes (the HTTP parser allows 256 KiB for URL-encoded headers). Commands use Wear OS Data Layer; async results are sent in bounded chunks to avoid a single-message size limit. File bytes use Data Layer `Asset`s by default or authenticated Wi-Fi when `--wifi` is selected; this option affects files only. Commands and STREAM always use Wear Data Layer.
+Prefer the standalone `wadb` command; it handles bearer auth and URL encoding, keeps the token in a mode-600 temporary curl config instead of process arguments, and removes that file when the command exits. The API exposes `/v1/status`, `/v1/exec`, `/v1/exec/cancel`, `/v1/jobs/status`, `/v1/jobs/output`, `/v1/jobs/cancel`, `/v1/files/push`, `/v1/files/pull`, and `/v1/stream/{open,input,output,resize,close}`. The command limit is 65536 UTF-8 bytes (the HTTP parser allows 256 KiB for URL-encoded headers). Commands use Wear OS Data Layer; async results are sent in bounded chunks to avoid a single-message size limit. File bytes use Data Layer `Asset`s by default or authenticated Wi-Fi when `--wifi` is selected; this option affects files only. Commands and STREAM always use Wear Data Layer.
