@@ -34,6 +34,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
+import java.util.UUID
 
 class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
@@ -74,6 +75,7 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  private lateinit var apiButton: Button
  private var stream=false
  private var streamAttempt=0
+ private var streamReaderJob:Job?=null
  private var rootMode=false
  private var streamReady=false
  private val pendingInput=ArrayList<ByteArray>()
@@ -84,6 +86,8 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  private var channelOutput:java.io.OutputStream?=null
  private data class PendingFileTransfer(val id:String,val key:ByteArray,val operation:String,val path:String,val uri:Uri?,val root:Boolean)
  private var pendingFileTransfer:PendingFileTransfer?=null
+ private var pendingWatchTraceId:String?=null
+ private var pendingWatchTrace:CompletableDeferred<String>?=null
  private data class QueuedFileTransfer(val operation:String,val path:String,val uri:Uri,val root:Boolean)
  private val fileTransferQueue=java.util.ArrayDeque<QueuedFileTransfer>()
  private var transferBatchTotal=0
@@ -108,6 +112,8 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  private val listingWaiters=java.util.concurrent.ConcurrentHashMap<String,CompletableDeferred<JSONObject>>()
  private val directoryWaiters=java.util.concurrent.ConcurrentHashMap<String,CompletableDeferred<JSONObject>>()
  private val deleteWaiters=java.util.concurrent.ConcurrentHashMap<String,CompletableDeferred<JSONObject>>()
+ private val pendingInstallRequests=java.util.concurrent.ConcurrentHashMap<String,CompletableDeferred<String>>()
+ private var remoteInstallButton:Button?=null
  private var confirmDelete=true
  private var fileBatchActive=false
  private var browserRequestId:String?=null
@@ -135,9 +141,9 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   val header=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(20),dp(6),dp(20),dp(6));setBackgroundColor(color(R.color.wb_canvas))}
   appHeader=header
   val brandRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL}
-  val brand=TextView(this).apply{text=t("WEARBRIDGE");textSize=12f;letterSpacing=.16f;setTextColor(color(R.color.wb_primary));typeface=Typeface.DEFAULT_BOLD;contentDescription=t("WearBridge device console")}
+  val brand=TextView(this).apply{text="WEARBRIDGEADB";textSize=13f;letterSpacing=.02f;setTextColor(color(R.color.wb_primary));typeface=Typeface.DEFAULT_BOLD;contentDescription=t("WearBridge device console")}
   brandRow.addView(brand,LinearLayout.LayoutParams(0,dp(28),1f))
-  connectionStatus=TextView(this).apply{text=t("Finding watch…");textSize=12f;setTextColor(color(R.color.wb_warning));gravity=android.view.Gravity.CENTER_VERTICAL;setPadding(dp(10),0,dp(10),0);background=rounded(color(R.color.wb_surface_raised),dp(18));contentDescription=t("Watch connection status");accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE}
+  connectionStatus=TextView(this).apply{text=t("Finding watch…");textSize=12f;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END;maxWidth=dp(220);setTextColor(color(R.color.wb_warning));gravity=android.view.Gravity.CENTER_VERTICAL;setPadding(dp(10),0,dp(10),0);background=rounded(color(R.color.wb_surface_raised),dp(18));contentDescription=t("Watch connection status");accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE}
   brandRow.addView(connectionStatus,LinearLayout.LayoutParams(-2,dp(32)))
   header.addView(brandRow)
 
@@ -185,10 +191,10 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   return when(value){
    "Terminal"->"Терминал";"Files"->"Файлы";"Settings"->"Настройки";"Finding watch…"->"Поиск часов…";"WATCH CONNECTED"->"ЧАСЫ ПОДКЛЮЧЕНЫ";"WATCH OFFLINE"->"ЧАСЫ НЕ В СЕТИ";"CONNECTION ERROR"->"ОШИБКА СОЕДИНЕНИЯ"
    "COMMAND MODE · MANUAL"->"РЕЖИМ КОМАНД · ВРУЧНУЮ";"COMMAND / TERMINAL INPUT"->"КОМАНДА / ВВОД ТЕРМИНАЛА";"Enter a command"->"Введите команду";"Run command"->"Выполнить";"STOP · Ctrl+C"->"СТОП · Ctrl+C";"Keys +"->"Клавиши +";"Keys −"->"Клавиши −";"Backspace"->"Стереть";"OUTPUT"->"ВЫВОД";"Disconnect"->"Отключить";"Close shell"->"Закрыть shell";"Clear"->"Очистить";"Copy"->"Копировать";"Exit"->"Выход";"TERMINAL"->"ТЕРМИНАЛ";"Terminal font size"->"Размер шрифта терминала";"TERMINAL FONT"->"ШРИФТ ТЕРМИНАЛА";"Clear terminal display"->"Очистить экран терминала";"Run in NORMAL or connect STREAM."->"Выполните команду в NORMAL или подключите STREAM."
-   "Watch files"->"Файлы часов";"Browse storage, move files, or remove selected items."->"Просматривайте хранилище, переносите и удаляйте файлы.";"WATCH STORAGE"->"ХРАНИЛИЩЕ ЧАСОВ";"Browse & download"->"Просмотр и скачивание";"SEND TO WATCH"->"ОТПРАВИТЬ НА ЧАСЫ";"Choose files"->"Выбрать файлы";"Choose a folder"->"Выбрать папку";"Downloads use the selected phone location. Upload and download keep folder structure for batches. ROOT access is controlled in Settings."->"Скачивание идёт в выбранное место телефона. Структура папок сохраняется. ROOT включается в настройках."
+   "Watch files"->"Файлы часов";"Browse storage, move files, or remove selected items."->"Просматривайте хранилище, переносите и удаляйте файлы.";"WATCH STORAGE"->"ХРАНИЛИЩЕ ЧАСОВ";"Browse & download"->"Просмотр и скачивание";"Install"->"Установить";"Install selected APK"->"Установить выбранный APK";"Install selected APK using Shizuku"->"Установить выбранный APK через Shizuku";"Select one APK file"->"Выберите один APK-файл";"Watch not connected"->"Часы не подключены";"Shizuku APK installation"->"Установка APK через Shizuku";"No installation output"->"Команда установки не вернула вывод";"APK installation failed"->"Не удалось установить APK";"OK"->"ОК";"SEND TO WATCH"->"ОТПРАВИТЬ НА ЧАСЫ";"Choose files"->"Выбрать файлы";"Choose a folder"->"Выбрать папку";"Downloads use the selected phone location. Upload and download keep folder structure for batches. ROOT access is controlled in Settings."->"Скачивание идёт в выбранное место телефона. Структура папок сохраняется. ROOT включается в настройках."
    "Choose how watch commands run and manage the local client API."->"Выберите профиль команд и настройте локальный API.";"LANGUAGE"->"ЯЗЫК";"WATCH EXECUTION PROFILE"->"ПРОФИЛЬ ВЫПОЛНЕНИЯ";"SHELL uses the Shizuku identity. ROOT uses the watch's separately granted KernelSU access."->"SHELL использует Shizuku. ROOT требует отдельного разрешения KernelSU на часах.";"TERMUX API"->"TERMUX API";"Copy API token"->"Скопировать API-токен";"API token copied. Save it in Termux with wadb configure."->"API-токен скопирован. Сохраните его в Termux командой wadb configure.";"Start the API once before copying its token."->"Сначала один раз запустите API, затем скопируйте токен.";"The API token grants command access to this phone's WearBridge. Keep it private."->"API-токен даёт доступ к выполнению команд WearBridge на этом телефоне. Храните его в секрете.";"CONNECTION"->"СОЕДИНЕНИЕ";"Wear Data Layer over the existing watch pairing"->"Wear Data Layer через сопряжение с часами";"Commands and terminal bytes use the paired connection. Wi-Fi is used only for direct file bytes when available."->"Команды и терминал работают через сопряжение. Wi-Fi нужен только для прямой передачи файлов.";"The API is available only on this phone at 127.0.0.1:${TermuxApiService.PORT}; it is not exposed to the local network."->"API доступен только на телефоне: 127.0.0.1:${TermuxApiService.PORT}. В локальной сети он закрыт."
    "Name A–Z"->"Имя А–Я";"Date modified"->"Дата изменения";"Size"->"Размер";"Type"->"Тип";"Name"->"Имя";"Date"->"Дата";"Name · A–Z"->"Имя · А–Я";"Date modified · newest first"->"Дата · сначала новые";"Size · largest first"->"Размер · сначала большие";"Type · extension"->"Тип · расширение";"Open shared storage"->"Открыть общую память";"Go to filesystem root"->"В корень файловой системы";"Already at filesystem root"->"Уже в корне файловой системы";"Go to parent folder"->"На уровень выше";"Open shared storage at /sdcard"->"Открыть общую память /sdcard";"Close browser"->"Закрыть браузер";"Sort by Name"->"Сортировка: имя";"Ask before delete · On"->"Спрашивать перед удалением · вкл";"Ask before delete · Off"->"Спрашивать перед удалением · выкл";"Select files or folders first"->"Сначала выберите файлы или папки";"No phone files were selected"->"Файлы телефона не выбраны";"No files were selected"->"Файлы не выбраны";"Wait for the active transfer"->"Дождитесь окончания передачи";"Loading folder…"->"Загрузка папки…";"Terminal output is empty"->"Вывод терминала пуст";"Terminal output copied"->"Вывод терминала скопирован";"Terminal selection copied"->"Выделенный текст скопирован";"ROOT file access"->"Доступ к файлам от ROOT";"This operation will run as root on the watch."->"Операция будет выполнена на часах с правами ROOT.";"More"->"Далее";"Previous"->"Назад";"Files on Xiaomi Watch 5"->"Файлы Xiaomi Watch 5";"Close"->"Закрыть";"Root"->"Корень";"Storage"->"Хранилище";"Sort files"->"Сортировка";"Cancel"->"Отмена";"Delete"->"Удалить";"Continue"->"Продолжить";"Nothing here yet"->"Здесь пока пусто";"This folder is empty."->"Папка пуста.";"This folder is empty. Choose another folder or upload files here."->"Папка пуста. Откройте другую или загрузите файлы сюда.";"Folders first"->"Сначала папки";"Upload here"->"Загрузить сюда";"DOWNLOAD FILES / FOLDERS"->"СКАЧАТЬ ФАЙЛЫ / ПАПКИ";"UPLOAD FILES"->"ЗАГРУЗИТЬ ФАЙЛЫ";"UPLOAD FOLDER"->"ЗАГРУЗИТЬ ПАПКУ";"Select multiple files or folders. Folder transfers keep their directory structure."->"Выберите несколько файлов или папок. Структура папок сохранится.";"Do not ask before deleting"->"Больше не спрашивать перед удалением"
-   "Allow Nearby devices to transfer files over Wi-Fi"->"Разрешите доступ к устройствам поблизости для передачи по Wi-Fi";"Choose the destination folder, then tap Upload here"->"Выберите папку назначения и нажмите «Загрузить сюда»";"Clear console output"->"Очистить вывод";"Clear selection"->"Снять выделение";"Close shell session. This does not send Ctrl+C to the foreground process."->"Закрыть shell-сессию. Это не Ctrl+C для текущего процесса.";"Command or terminal input"->"Ввод команды или терминала";"Console output"->"Вывод консоли";"Copy all console output"->"Скопировать весь вывод";"Delete selected files and folders"->"Удалить выбранные файлы и папки";"Download selected files"->"Скачать выбранные файлы";"Execution mode"->"Режим выполнения";"Exit fullscreen terminal"->"Выйти из полноэкранного терминала";"Main navigation"->"Основная навигация";"More watch storage actions"->"Дополнительные действия";"Open fullscreen terminal"->"Открыть полноэкранный терминал";"Run command or send terminal input"->"Выполнить команду или отправить ввод";"Selectable terminal output"->"Выделяемый вывод терминала";"Selected items"->"Выбранные элементы";"Send Ctrl+C to the foreground terminal process"->"Отправить Ctrl+C текущему процессу";"Show terminal control keys"->"Показать терминальные клавиши";"Hide terminal control keys"->"Скрыть терминальные клавиши";"Terminal control keys shown"->"Терминальные клавиши показаны";"Terminal control keys hidden"->"Терминальные клавиши скрыты";"Start or stop the Termux loopback API"->"Запустить или остановить локальный Termux API";"Terminal output"->"Вывод терминала";"Terminal output; earlier output trimmed to limit memory use"->"Вывод терминала; старые данные сокращены";"Terminal output; no command output yet"->"Вывод терминала пока пуст";"Toggle Control modifier"->"Переключить модификатор Ctrl";"Toggle watch execution profile between SHELL and ROOT"->"Переключить профиль часов между SHELL и ROOT";"Watch connection status"->"Состояние подключения часов";"WearBridge device console"->"Консоль часов WearBridge";"… earlier output trimmed …\n"->"… старый вывод сокращён …\n"
+   "Allow Nearby devices to transfer files over Wi-Fi"->"Разрешите доступ к устройствам поблизости для передачи по Wi-Fi";"Choose the destination folder, then tap Upload here"->"Выберите папку назначения и нажмите «Загрузить сюда»";"Clear console output"->"Очистить вывод";"Clear selection"->"Снять выделение";"Close shell session. This does not send Ctrl+C to the foreground process."->"Закрыть shell-сессию. Это не Ctrl+C для текущего процесса.";"Command or terminal input"->"Ввод команды или терминала";"Console output"->"Вывод консоли";"Copy all console output"->"Скопировать весь вывод";"Delete selected files and folders"->"Удалить выбранные файлы и папки";"Download selected files"->"Скачать выбранные файлы";"Execution mode"->"Режим выполнения";"Exit fullscreen terminal"->"Выйти из полноэкранного терминала";"Main navigation"->"Основная навигация";"More watch storage actions"->"Дополнительные действия";"Open fullscreen terminal"->"Открыть полноэкранный терминал";"Run command or send terminal input"->"Выполнить команду или отправить ввод";"Selectable terminal output"->"Выделяемый вывод терминала";"Selected items"->"Выбранные элементы";"Send Ctrl+C to the foreground terminal process"->"Отправить Ctrl+C текущему процессу";"Show terminal control keys"->"Показать терминальные клавиши";"Hide terminal control keys"->"Скрыть терминальные клавиши";"Terminal control keys shown"->"Терминальные клавиши показаны";"Terminal control keys hidden"->"Терминальные клавиши скрыты";"Start or stop the Termux loopback API"->"Запустить или остановить локальный Termux API";"Terminal output"->"Вывод терминала";"Terminal output; earlier output trimmed to limit memory use"->"Вывод терминала; старые данные сокращены";"Terminal output; no command output yet"->"Вывод терминала пока пуст";"Toggle Control modifier"->"Переключить модификатор Ctrl";"Toggle watch execution profile between SHELL and ROOT"->"Переключить профиль часов между SHELL и ROOT";"Watch connection status"->"Состояние подключения часов";"WearBridge device console"->"Консоль часов WearBridge";"… earlier output trimmed …\n"->"… старый вывод сокращён …\n";"Diagnostics"->"Диагностика";"Request tracing · ON"->"Трассировка запросов · ВКЛ";"Request tracing · OFF"->"Трассировка запросов · ВЫКЛ";"Tracing stores request IDs, stages, timings and watch power state locally; command text is never recorded."->"Локально записываются ID, этапы, время и состояние питания часов; текст команд не сохраняется.";"Refresh trace"->"Обновить трассу";"Copy trace"->"Копировать трассу";"No trace entries yet"->"Записей трассы пока нет";"Get watch trace"->"Получить трассу часов";"Watch trace request is already running"->"Запрос трассы часов уже выполняется";"Waiting for trace from watch…"->"Ожидание трассы с часов…";"PHONE TRACE"->"ТРАССА ТЕЛЕФОНА";"WATCH TRACE"->"ТРАССА ЧАСОВ";"Watch trace received"->"Трасса часов получена";"Watch trace request timed out"->"Истекло время ожидания трассы часов";"Watch trace transfer failed"->"Не удалось получить трассу часов";"Clear phone trace"->"Очистить трассу телефона";"Phone trace cleared"->"Трасса телефона очищена"
    "›  Output will appear here\n   Run in NORMAL or connect STREAM."->"›  Вывод появится здесь\n   Выполните команду в NORMAL или подключите STREAM.";"NORMAL · ready"->"NORMAL · готово";"STREAM · connecting…"->"STREAM · подключение…";"STREAM · disconnected"->"STREAM · отключён";"Waiting for paired watch"->"Ожидание сопряжённых часов";"NORMAL · terminal closed"->"NORMAL · терминал закрыт";"ROOT · ON"->"ROOT · ВКЛ";"SHELL · ACTIVE"->"SHELL · АКТИВЕН";"TERMUX API · RUNNING"->"TERMUX API · РАБОТАЕТ";"TERMUX API · STOPPED"->"TERMUX API · ОСТАНОВЛЕН"
    else -> when {
     value.contains(" items  ·  Sort: ") -> value.replace(" items  ·  Sort: "," элементов · Сортировка: ")
@@ -434,6 +440,28 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   connectionCard.addView(TextView(this).apply{text=t("Wear Data Layer over the existing watch pairing");textSize=15f;typeface=Typeface.DEFAULT_BOLD;setTextColor(color(R.color.wb_on_surface))})
   connectionCard.addView(copyText("Commands and terminal bytes use the paired connection. Wi-Fi is used only for direct file bytes when available.",12f))
   page.addView(connectionCard)
+  if(BuildConfig.REQUEST_TRACE_ENABLED){
+  page.addView(label("Diagnostics"))
+  page.addView(copyText("Tracing stores request IDs, stages, timings and watch power state locally; command text is never recorded.",12f))
+  val traceText=TextView(this).apply{textSize=11f;typeface=Typeface.MONOSPACE;setTextColor(color(R.color.wb_on_surface));setPadding(dp(12),dp(10),dp(12),dp(10));background=rounded(color(R.color.wb_console),dp(12));text=RequestTrace.read(this@MainActivity).ifBlank{t("No trace entries yet")};setTextIsSelectable(true)}
+  page.addView(Switch(this).apply{
+   text=t(if(RequestTrace.isEnabled(this@MainActivity))"Request tracing · ON" else "Request tracing · OFF");textSize=14f;setTextColor(color(R.color.wb_on_surface));isChecked=RequestTrace.isEnabled(this@MainActivity)
+   setOnCheckedChangeListener{_,enabled->RequestTrace.setEnabled(this@MainActivity,enabled);text=t(if(enabled)"Request tracing · ON" else "Request tracing · OFF");Toast.makeText(this@MainActivity,text,Toast.LENGTH_SHORT).show()}
+  },LinearLayout.LayoutParams(-1,dp(52)))
+  val traceActions=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+  traceActions.addView(actionButton("Refresh trace",color(R.color.wb_surface_raised),color(R.color.wb_on_surface)){traceText.text=RequestTrace.read(this@MainActivity).ifBlank{t("No trace entries yet")}},LinearLayout.LayoutParams(0,dp(48),1f))
+  traceActions.addView(actionButton("Copy trace",color(R.color.wb_surface_raised),color(R.color.wb_secondary)){
+   val value=traceText.text.toString();if(value.isBlank() || value==t("No trace entries yet"))Toast.makeText(this@MainActivity,t("No trace entries yet"),Toast.LENGTH_SHORT).show() else {val clipboard=getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager;clipboard.setPrimaryClip(ClipData.newPlainText("WearBridge request trace",value));Toast.makeText(this@MainActivity,t("Copy trace"),Toast.LENGTH_SHORT).show()}
+  },LinearLayout.LayoutParams(0,dp(48),1f).apply{leftMargin=dp(8)})
+  page.addView(traceActions)
+  page.addView(actionButton("Get watch trace",color(R.color.wb_surface_raised),color(R.color.wb_on_surface)){requestWatchTrace(traceText)},LinearLayout.LayoutParams(-1,dp(48)).apply{topMargin=dp(8)})
+  page.addView(actionButton("Clear phone trace",color(R.color.wb_surface_raised),color(R.color.wb_on_surface)){
+   RequestTrace.clear(this@MainActivity)
+   traceText.text=t("No trace entries yet")
+   Toast.makeText(this@MainActivity,t("Phone trace cleared"),Toast.LENGTH_SHORT).show()
+  },LinearLayout.LayoutParams(-1,dp(48)).apply{topMargin=dp(8)})
+  page.addView(traceText)
+  }
   return page
  }
  private fun enableEdgeToEdge(root:View){
@@ -448,9 +476,11 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   root.requestApplyInsets()
  }
  private suspend fun refreshConnection(){
-  try{nodeId=Wearable.getNodeClient(this).connectedNodes.await().firstOrNull()?.id
-   val connected=nodeId!=null
-   connectionStatus.text=t(if(connected)"WATCH CONNECTED" else "WATCH OFFLINE")
+  try{val node=Wearable.getNodeClient(this).connectedNodes.await().firstOrNull();nodeId=node?.id
+   val connected=node!=null
+   val watchName=node?.displayName?.trim().orEmpty()
+   connectionStatus.text=if(connected&&watchName.isNotEmpty())watchName else t(if(connected)"WATCH CONNECTED" else "WATCH OFFLINE")
+   connectionStatus.contentDescription=if(connected&&watchName.isNotEmpty())"${t("Watch connection status")}: $watchName" else t("Watch connection status")
    connectionStatus.setTextColor(color(if(connected)R.color.wb_success else R.color.wb_warning))
    refreshModeStatus()
   }catch(t:Throwable){nodeId=null;connectionStatus.text=t("CONNECTION ERROR");connectionStatus.setTextColor(color(R.color.wb_error));mode.text=t("Data Layer unavailable · ${t.message?:"check Wear OS connection"}")}
@@ -480,7 +510,7 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  private fun clearOutput(){hasOutput=false;output.text=t(EMPTY_OUTPUT);fullscreenPlainOutput?.text=t(EMPTY_OUTPUT);fullscreenView?.clearScreen();output.contentDescription=t("Terminal output; no command output yet")}
  private fun refreshPrivilegeButton(){privilegeButton.text=t(if(rootMode)"ROOT · ON" else "SHELL · ACTIVE");privilegeButton.background=rounded(if(rootMode)color(R.color.wb_error) else color(R.color.wb_surface_raised),dp(15));privilegeButton.setTextColor(if(rootMode)color(R.color.wb_on_primary) else color(R.color.wb_on_surface));privilegeButton.isSelected=rootMode}
  private fun copyTermuxApiToken(){
-  val file=java.io.File(filesDir,TermuxApiService.TOKEN_FILE)
+  val file=java.io.File(noBackupFilesDir,TermuxApiService.TOKEN_FILE)
   if(!file.isFile){Toast.makeText(this,t("Start the API once before copying its token."),Toast.LENGTH_SHORT).show();return}
   val clipboard=getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
   clipboard.setPrimaryClip(ClipData.newPlainText("WearBridge Termux API token",file.readText().trim()))
@@ -499,18 +529,19 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  private fun setNormal(){ if(stream)closeStream();stream=false;refreshModeStatus();refreshModeButtons() }
  private fun setStream(){ if(stream)return;stream=true;val attempt=++streamAttempt;refreshModeButtons();mode.text=t("STREAM · connecting…");val target=nodeId?:run{append("Watch disconnected\n");stream=false;refreshModeButtons();refreshModeStatus();return}
   scope.launch{try{val cc=Wearable.getChannelClient(this@MainActivity);val ch=cc.openChannel(target,if(rootMode)"/terminal/root" else "/terminal").await()?:error("Could not open channel");if(!stream||attempt!=streamAttempt){cc.close(ch).await();return@launch};channel=ch;channelInput=cc.getInputStream(ch).await();channelOutput=cc.getOutputStream(ch).await();if(!stream||attempt!=streamAttempt)return@launch;streamReady=true;refreshModeButtons();refreshModeStatus();append("\n[stream connected · ${if(rootMode) "root" else "shell"}]\n");if(fullscreenView==null)fullscreenView=BridgeTerminalView(this@MainActivity,{ bytes->sendTerminalBytes(bytes) },{ rows,cols->notifyWatchPtySize(rows,cols) },terminalFontSizeSp.toFloat());if(fullscreenTerminal)fullscreenFrame?.let{attachFullscreenEmulator(it)};val queued=pendingInput.toList();pendingInput.clear();pendingBytes=0;queued.forEach{sendControl(it)}
-   launch(Dispatchers.IO){val b=ByteArray(4096);try{while(isActive){val n=channelInput?.read(b)?:-1;if(n<0){withContext(Dispatchers.Main){if(streamReady)markStreamLost("remote closed the channel")};break};withContext(Dispatchers.Main){fullscreenView?.feed(b,n)};val text=String(b,0,n,Charsets.UTF_8);withContext(Dispatchers.Main){append(text)}}}catch(e:Exception){withContext(Dispatchers.Main){if(streamReady){streamReady=false;stream=false;mode.text=t("STREAM · disconnected");markStreamLost("${e.message}")}}} }
-  }catch(e:Exception){if(attempt!=streamAttempt)return@launch;append("Stream open failed: ${e.message}\n");stream=false;streamReady=false;pendingInput.clear();pendingBytes=0;refreshModeButtons();mode.text=t("STREAM · disconnected")}}
+   streamReaderJob=launch(Dispatchers.IO){val b=ByteArray(4096);try{while(isActive){val input=channelInput?:break;val n=input.read(b);if(n<0){withContext(Dispatchers.Main){if(streamReady)markStreamLost("remote closed the channel")};break};withContext(Dispatchers.Main){fullscreenView?.feed(b,n)};val text=String(b,0,n,Charsets.UTF_8);withContext(Dispatchers.Main){append(text)}}}catch(cancelled:CancellationException){throw cancelled}catch(e:Exception){withContext(Dispatchers.Main){if(streamReady){streamReady=false;stream=false;mode.text=t("STREAM · disconnected");markStreamLost("${e.message}")}}} }
+  }catch(cancelled:CancellationException){throw cancelled}catch(e:Exception){if(attempt!=streamAttempt)return@launch;append("Stream open failed: ${e.message}\n");stream=false;streamReady=false;pendingInput.clear();pendingBytes=0;refreshModeButtons();mode.text=t("STREAM · disconnected")}}
  }
- private fun closeStream(){streamAttempt++;val ch=channel;channel=null;streamReady=false;pendingInput.clear();pendingBytes=0;try{channelInput?.close()}catch(_:Exception){};try{channelOutput?.close()}catch(_:Exception){};channelInput=null;channelOutput=null;stopLocalTerminal();if(ch!=null)scope.launch{try{Wearable.getChannelClient(this@MainActivity).close(ch).await()}catch(_:Exception){}};stream=false;refreshModeButtons();mode.text=t(if(nodeId==null)"Waiting for paired watch" else "NORMAL · terminal closed");append("\n[terminal disconnected]\n")}
+ private fun closeStream(){streamAttempt++;val ch=channel;channel=null;streamReady=false;streamReaderJob?.cancel();streamReaderJob=null;try{channelInput?.close()}catch(_:java.io.IOException){};try{channelOutput?.close()}catch(_:java.io.IOException){};channelInput=null;channelOutput=null;pendingInput.clear();pendingBytes=0;stopLocalTerminal();if(ch!=null)scope.launch{try{Wearable.getChannelClient(applicationContext).close(ch).await()}catch(_:Exception){}};stream=false;refreshModeButtons();mode.text=t(if(nodeId==null)"Waiting for paired watch" else "NORMAL · terminal closed");append("\n[terminal disconnected]\n")}
  private fun runInput(){val text=command.text.toString();if(text.isEmpty()&&!stream)return;command.setText("")
   if(stream){val bytes=(text+"\r").toByteArray(Charsets.UTF_8);sendControl(bytes);return}
   if(commandHistory.lastOrNull()!=text)commandHistory.add(text)
   if(commandHistory.size>200)commandHistory.removeAt(0)
   historyIndex=commandHistory.size;historyDraft=""
-  val target=nodeId?:run{append("Watch disconnected\n");return};val id=System.currentTimeMillis().toString()
+  val target=nodeId?:run{append("Watch disconnected\n");return};val id=UUID.randomUUID().toString()
   pendingNormalRequests.add(id);refreshModeStatus()
-  scope.launch{try{Wearable.getMessageClient(this@MainActivity).sendMessage(target,"/exec","$id\n${if(rootMode) "root" else "shell"}\n$text".toByteArray()).await()}catch(e:Exception){pendingNormalRequests.remove(id);refreshModeStatus();append("Transport error: ${e.message}\n")}}
+  RequestTrace.record(this,id,"send_start","profile=${if(rootMode)"root" else "shell"} commandChars=${text.length}")
+  scope.launch{try{Wearable.getMessageClient(this@MainActivity).sendMessage(target,"/exec","$id\n${if(rootMode) "root" else "shell"}\n$text".toByteArray()).await();RequestTrace.record(this@MainActivity,id,"send_ack")}catch(e:Exception){RequestTrace.record(this@MainActivity,id,"send_failed",e.javaClass.simpleName);pendingNormalRequests.remove(id);refreshModeStatus();append("Transport error: ${e.message}\n")}}
  }
  private fun navigateCommandHistory(direction:Int){
   if(commandHistory.isEmpty())return
@@ -550,6 +581,17 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  override fun onResume(){super.onResume();refreshApiButton();if(::connectionStatus.isInitialized&&::mode.isInitialized)scope.launch{refreshConnection()}}
  override fun onMessageReceived(event:MessageEvent){
   val message=String(event.data,Charsets.UTF_8)
+  if(event.path=="/diagnostics/trace/result"){
+   if(!BuildConfig.REQUEST_TRACE_ENABLED)return
+   val id=message.substringBefore('\n')
+   if(id==pendingWatchTraceId)pendingWatchTrace?.complete(message.substringAfter('\n',""))
+   return
+  }
+  if(event.path=="/result"){
+   val id=message.substringBefore('\n').removePrefix("[").removeSuffix("]")
+   val install=pendingInstallRequests.remove(id)
+   if(install!=null){install.complete(message);return}
+  }
   if(event.path=="/file-transfer/list-result"||event.path=="/file-transfer/mkdir-result"||event.path=="/file-transfer/delete-result"){
    val json=try{JSONObject(message)}catch(_:Throwable){null};val id=json?.optString("id").orEmpty()
    val waiters=when { event.path.endsWith("list-result")->listingWaiters; event.path.endsWith("mkdir-result")->directoryWaiters; else->deleteWaiters }
@@ -559,18 +601,52 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   runOnUiThread{when(event.path){"/result"->showNormalResult(message);"/stream-error"->append("Watch stream setup failed: $message\n");"/file-transfer/ready"->handleWifiFileReady(message);"/file-transfer/list-result"->handleRemoteListing(message)}}
  }
 
+ private fun requestWatchTrace(view:TextView){
+  val target=nodeId
+  if(target==null){Toast.makeText(this,t("Watch not connected"),Toast.LENGTH_SHORT).show();return}
+  if(pendingWatchTrace!=null){Toast.makeText(this,t("Watch trace request is already running"),Toast.LENGTH_SHORT).show();return}
+  val requestId=UUID.randomUUID().toString()
+  val reply=CompletableDeferred<String>()
+  pendingWatchTraceId=requestId
+  pendingWatchTrace=reply
+  view.text=t("Waiting for trace from watch…")
+  scope.launch {
+   try {
+    Wearable.getMessageClient(this@MainActivity).sendMessage(target,"/diagnostics/trace/request",requestId.toByteArray(Charsets.US_ASCII)).await()
+    val watchTrace=withTimeout(20000){reply.await()}
+    if(pendingWatchTraceId==requestId){
+     val phoneTrace=RequestTrace.read(this@MainActivity).ifBlank{t("No trace entries yet")}
+     view.text="${t("PHONE TRACE")}\n$phoneTrace\n\n${t("WATCH TRACE")}\n$watchTrace"
+     Toast.makeText(this@MainActivity,t("Watch trace received"),Toast.LENGTH_SHORT).show()
+    }
+   }catch(error:kotlinx.coroutines.TimeoutCancellationException){
+    if(pendingWatchTraceId==requestId)view.text=t("Watch trace request timed out")
+    Toast.makeText(this@MainActivity,t("Watch trace request timed out"),Toast.LENGTH_SHORT).show()
+   }catch(error:Throwable){
+    if(error is kotlinx.coroutines.CancellationException)throw error
+    if(pendingWatchTraceId==requestId)view.text="${t("Watch trace transfer failed")}: ${error.message?:error.javaClass.simpleName}"
+    Toast.makeText(this@MainActivity,t("Watch trace transfer failed"),Toast.LENGTH_SHORT).show()
+   }finally{
+    if(pendingWatchTraceId==requestId){pendingWatchTraceId=null;pendingWatchTrace=null}
+   }
+  }
+ }
+
  private fun showNormalResult(message:String){
-  pendingNormalRequests.remove(message.substringBefore('\n'))
+  val requestId=message.substringBefore('\n').removePrefix("[").removeSuffix("]")
+  RequestTrace.record(this,requestId,"response_received","messageBytes=${message.toByteArray(Charsets.UTF_8).size}")
+  pendingNormalRequests.remove(requestId)
   refreshModeStatus()
   val payload=message.substringAfter('\n',message)
   val stdoutMarker="stdout:\n";val stderrMarker="\nstderr:\n"
   val start=payload.indexOf(stdoutMarker)
-  if(start<0){append(payload);return}
+  if(start<0){append(payload);RequestTrace.record(this,requestId,"ui_completed","unformattedChars=${payload.length}");return}
   val content=payload.substring(start+stdoutMarker.length)
   val split=content.indexOf(stderrMarker)
   val stdout=if(split>=0)content.substring(0,split) else content
   val stderr=if(split>=0)content.substring(split+stderrMarker.length) else ""
   append(stdout+stderr)
+  RequestTrace.record(this,requestId,"ui_completed","stdoutChars=${stdout.length} stderrChars=${stderr.length}")
  }
 
  private fun showFileActions(){
@@ -695,7 +771,7 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   val sortNames=arrayOf(t("Name A–Z"),t("Date modified"),t("Size"),t("Type"))
   val sortLabels=arrayOf(t("Name"),t("Date"),t("Size"),t("Type"))
   body.addView(TextView(this).apply{text=t("${sorted.size} items  ·  Sort: ${sortLabels[browserSort]}");textSize=11f;setTextColor(color(R.color.wb_on_surface_variant));contentDescription=t("${sorted.size} items, sorted by ${sortNames[browserSort]}");gravity=android.view.Gravity.CENTER_VERTICAL},LinearLayout.LayoutParams(-1,dp(28)))
-  more.setOnClickListener{val menu=PopupMenu(this,more);menu.menu.add(0,1,0,t(if(path=="/")"Open shared storage" else "Go to filesystem root"));menu.menu.add(0,2,1,t("Sort by ${sortLabels[browserSort]}"));if(!uploadMode)menu.menu.add(0,3,2,t("Ask before delete · ${if(confirmDelete)"On" else "Off"}"));menu.menu.add(0,4,3,t("Close browser"));menu.setOnMenuItemClickListener{item->when(item.itemId){1->{dialog.dismiss();openRemoteBrowser(if(path=="/")"/sdcard" else "/")};2->{dialog.dismiss();selectBrowserSort(path)};3->{confirmDelete=!confirmDelete;getSharedPreferences("wearbridge_files",MODE_PRIVATE).edit().putBoolean("confirm_delete",confirmDelete).apply();Toast.makeText(this,t("Delete confirmation ${if(confirmDelete)"enabled" else "disabled"}"),Toast.LENGTH_SHORT).show()};4->dialog.dismiss()};true};menu.show()}
+  more.setOnClickListener{val menu=PopupMenu(this,more);menu.menu.add(0,1,0,t(if(path=="/")"Open shared storage" else "Go to filesystem root"));menu.menu.add(0,2,1,t("Sort by ${sortLabels[browserSort]}"));if(!uploadMode)menu.menu.add(0,3,2,t("Ask before delete · ${if(confirmDelete)"On" else "Off"}"));val selectedApk=selectedRemotePaths.entries.singleOrNull()?.takeIf{!it.value&&it.key.endsWith(".apk",true)}?.key;menu.menu.add(0,5,3,t("Install selected APK")).isEnabled=selectedApk!=null;menu.menu.add(0,4,4,t("Close browser"));menu.setOnMenuItemClickListener{item->when(item.itemId){1->{dialog.dismiss();openRemoteBrowser(if(path=="/")"/sdcard" else "/")};2->{dialog.dismiss();selectBrowserSort(path)};3->{confirmDelete=!confirmDelete;getSharedPreferences("wearbridge_files",MODE_PRIVATE).edit().putBoolean("confirm_delete",confirmDelete).apply();Toast.makeText(this,t("Delete confirmation ${if(confirmDelete)"enabled" else "disabled"}"),Toast.LENGTH_SHORT).show()};4->dialog.dismiss();5->selectedApk?.let{dialog.dismiss();installWatchApk(it)}};true};menu.show()}
   val scroll=ScrollView(this).apply{isFillViewport=true;isVerticalScrollBarEnabled=true}
   val rows=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
   entries.forEach{entry->
@@ -739,6 +815,8 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
    toolbar.addView(actionButton("×",Color.TRANSPARENT,color(R.color.wb_on_surface_variant)){selectedRemotePaths.clear();updateRemoteSelectionUi()}.apply{contentDescription=t("Clear selection")},LinearLayout.LayoutParams(dp(48),dp(48)))
    toolbar.addView(actionButton("↓",color(R.color.wb_primary),color(R.color.wb_on_primary)){dialog.dismiss();downloadSelectedRemotePaths()}.apply{contentDescription=t("Download selected files")},LinearLayout.LayoutParams(dp(48),dp(48)))
    toolbar.addView(actionButton("⌫",color(R.color.wb_error),color(R.color.wb_on_primary)){dialog.dismiss();deleteSelectedRemotePaths()}.apply{contentDescription=t("Delete selected files and folders")},LinearLayout.LayoutParams(dp(48),dp(48)))
+   remoteInstallButton=actionButton("Install",color(R.color.wb_secondary),color(R.color.wb_on_primary)){val apk=selectedRemotePaths.keys.singleOrNull();if(apk!=null){dialog.dismiss();installWatchApk(apk)}}.apply{contentDescription=t("Install selected APK using Shizuku")}
+   toolbar.addView(remoteInstallButton,LinearLayout.LayoutParams(dp(72),dp(48)))
    remoteSelectionToolbar=toolbar
    body.addView(toolbar,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(6)})
   }
@@ -764,6 +842,23 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   remoteSelectionCount?.text=t("${selectedRemotePaths.size} selected")
   remoteSelectionToolbar?.visibility=if(selectedRemotePaths.isEmpty())View.GONE else View.VISIBLE
   visibleRemoteChecks.forEach{(path,check)->check.isChecked=selectedRemotePaths.containsKey(path)}
+  val apk=selectedRemotePaths.entries.singleOrNull()?.let{!it.value&&it.key.endsWith(".apk",true)}==true
+  remoteInstallButton?.visibility=if(apk)View.VISIBLE else View.GONE
+ }
+
+ private fun installWatchApk(path:String){
+  if(!path.startsWith("/")||!path.endsWith(".apk",true)){Toast.makeText(this,t("Select one APK file"),Toast.LENGTH_SHORT).show();return}
+  val target=nodeId?:run{Toast.makeText(this,t("Watch not connected"),Toast.LENGTH_SHORT).show();return}
+  val id=java.util.UUID.randomUUID().toString();val waiter=CompletableDeferred<String>();pendingInstallRequests[id]=waiter
+  val quoted="'"+path.replace("'","'\\''")+"'"
+  scope.launch{
+   try{
+    Wearable.getMessageClient(this@MainActivity).sendMessage(target,"/exec","$id\nshell\npm install -r $quoted".toByteArray(Charsets.UTF_8)).await()
+    val response=withTimeout(180_000){waiter.await()}.substringAfter('\n',"")
+    withContext(Dispatchers.Main){AlertDialog.Builder(android.view.ContextThemeWrapper(this@MainActivity,R.style.WearBridgeTheme)).setTitle(t("Shizuku APK installation")).setMessage(response.trim().ifBlank{t("No installation output")}).setPositiveButton(t("OK"),null).show()}
+   }catch(e:Throwable){withContext(Dispatchers.Main){Toast.makeText(this@MainActivity,"${t("APK installation failed")}: ${e.message?:e.javaClass.simpleName}",Toast.LENGTH_LONG).show()}}
+   finally{pendingInstallRequests.remove(id)}
+  }
  }
 
  private fun deleteSelectedRemotePaths(){
@@ -1054,7 +1149,7 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
  }
 
  companion object { private const val REQUEST_UPLOAD=7301; private const val REQUEST_DOWNLOAD=7302; private const val REQUEST_NEARBY_WIFI=7303; private const val REQUEST_UPLOAD_TREE=7304; private const val REQUEST_DOWNLOAD_TREE=7305; private const val MAX_OUTPUT_CHARS=262144; private const val OUTPUT_TRIM_BATCH=32768; private const val EMPTY_OUTPUT="›  Output will appear here\n   Run in NORMAL or connect STREAM." }
- private fun markStreamLost(reason:String){streamReady=false;stream=false;refreshModeButtons();channel=null;try{channelInput?.close()}catch(_:Exception){};try{channelOutput?.close()}catch(_:Exception){};channelInput=null;channelOutput=null;stopLocalTerminal();mode.text=t("STREAM · disconnected");append("Stream disconnected: $reason\n")}
+ private fun markStreamLost(reason:String){streamReaderJob?.cancel();streamReaderJob=null;streamReady=false;stream=false;refreshModeButtons();val ch=channel;channel=null;try{channelInput?.close()}catch(_:java.io.IOException){};try{channelOutput?.close()}catch(_:java.io.IOException){};channelInput=null;channelOutput=null;if(ch!=null)scope.launch{try{Wearable.getChannelClient(applicationContext).close(ch).await()}catch(_:Exception){}};stopLocalTerminal();mode.text=t("STREAM · disconnected");append("Stream disconnected: $reason\n")}
  private fun append(text:String){
   val wasAtBottom=if(::outputScroll.isInitialized&&::output.isInitialized)outputScroll.scrollY+outputScroll.height>=output.height-dp(40) else true
   if(!hasOutput){output.text=t("");hasOutput=true}
@@ -1069,5 +1164,16 @@ class MainActivity : Activity(), MessageClient.OnMessageReceivedListener {
   }else output.contentDescription=t("Terminal output")
   if(wasAtBottom&&::outputScroll.isInitialized)outputScroll.post{outputScroll.fullScroll(View.FOCUS_DOWN)}
  }
- override fun onDestroy(){Wearable.getMessageClient(this).removeListener(this);if(stream)closeStream() else stopLocalTerminal();scope.cancel();super.onDestroy()}
+ override fun onDestroy(){
+  Wearable.getMessageClient(this).removeListener(this)
+  if(stream||channel!=null){
+   streamAttempt++;streamReaderJob?.cancel();streamReaderJob=null
+   val ch=channel;channel=null;streamReady=false;stream=false;pendingInput.clear();pendingBytes=0
+   try{channelInput?.close()}catch(_:java.io.IOException){};try{channelOutput?.close()}catch(_:java.io.IOException){}
+   channelInput=null;channelOutput=null;stopLocalTerminal()
+   if(ch!=null)Wearable.getChannelClient(applicationContext).close(ch)
+  }else stopLocalTerminal()
+  scope.cancel()
+  super.onDestroy()
+ }
 }

@@ -23,6 +23,9 @@ internal class BridgeTerminalView(
 ) : View(context) {
     private data class Cell(var char: Char = ' ', var fg: Int = Color.rgb(222, 232, 235), var bg: Int = Color.rgb(13, 22, 28))
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE; textSize = fontSizeSp * resources.displayMetrics.scaledDensity }
+    private var cellWidth = max(1f, paint.measureText("M"))
+    private var cellHeight = max(1f, paint.fontMetrics.descent - paint.fontMetrics.ascent + 2f * resources.displayMetrics.density)
+    private var drawBuffer = CharArray(80)
     private val palette = intArrayOf(0xff102028.toInt(), 0xffef7773.toInt(), 0xff89d68f.toInt(), 0xfff1d184.toInt(), 0xff86b5ee.toInt(), 0xffca9ee6.toInt(), 0xff82d3d3.toInt(), 0xffdce8eb.toInt())
     private val defaultFg = palette[7]
     private val defaultBg = 0xff0d161c.toInt()
@@ -52,9 +55,9 @@ internal class BridgeTerminalView(
     private var selectionEnd: Pair<Int, Int>? = null
     private val beginSelection = Runnable { selecting = true; val point = touchCell(touchX, touchY); selectionStart = point; selectionEnd = point; invalidate() }
     private fun touchCell(px: Float, py: Float): Pair<Int, Int> {
-        val hiddenRows = (rows - max(1, (height / ch).toInt())).coerceAtLeast(0)
-        val line = ((if(alternate) 0 else history.size) + hiddenRows + (py / ch).toInt() - scrollOffset).coerceIn(0, history.size + rows - 1)
-        return Pair(line, (px / cw).toInt().coerceIn(0, cols - 1))
+        val hiddenRows = (rows - max(1, (height / cellHeight).toInt())).coerceAtLeast(0)
+        val line = ((if(alternate) 0 else history.size) + hiddenRows + (py / cellHeight).toInt() - scrollOffset).coerceIn(0, history.size + rows - 1)
+        return Pair(line, (px / cellWidth).toInt().coerceIn(0, cols - 1))
     }
     private fun cellOrder(a: Pair<Int, Int>, b: Pair<Int, Int>): Int = if(a.first != b.first) a.first.compareTo(b.first) else a.second.compareTo(b.second)
     fun selectedText(): String? {
@@ -74,10 +77,10 @@ internal class BridgeTerminalView(
     private fun newScreen() = MutableList(rows) { newRow() }
     private fun newRow() = MutableList(cols) { Cell(bg = bg) }
     init { isFocusable = true; isFocusableInTouchMode = true; setBackgroundColor(defaultBg) }
-    private val cw get() = max(1f, paint.measureText("M"))
-    private val ch get() = max(1f, paint.fontMetrics.descent - paint.fontMetrics.ascent + 2f * resources.displayMetrics.density)
     fun setFontSizeSp(size: Float) {
         paint.textSize = size * resources.displayMetrics.scaledDensity
+        cellWidth = max(1f, paint.measureText("M"))
+        cellHeight = max(1f, paint.fontMetrics.descent - paint.fontMetrics.ascent + 2f * resources.displayMetrics.density)
         resizeGrid(width, height)
         invalidate()
     }
@@ -94,11 +97,12 @@ internal class BridgeTerminalView(
     }
     private fun resizeGrid(w: Int, h: Int) {
         if (w == 0 || h == 0) return
-        val newCols = (w / cw).toInt().coerceIn(20, 500)
-        val newRows = (h / ch).toInt().coerceIn(2, 300)
+        val newCols = (w / cellWidth).toInt().coerceIn(20, 500)
+        val newRows = (h / cellHeight).toInt().coerceIn(2, 300)
         if (newCols != cols || newRows != rows) {
             val oldRows = rows
             cols = newCols; rows = newRows
+            if (drawBuffer.size != cols) drawBuffer = CharArray(cols)
             screen.forEach { row -> while (row.size < cols) row.add(Cell(bg = bg)); while (row.size > cols) row.removeAt(row.lastIndex) }
             if (rows < oldRows) {
                 // Keep the active command line visible when an IME or rotation shrinks the viewport.
@@ -210,29 +214,41 @@ internal class BridgeTerminalView(
     }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val visibleHistory = if (alternate) emptyList() else history.toList()
-        val all = visibleHistory + screen
-        val start = (all.size - rows - scrollOffset).coerceAtLeast(0)
-        val hiddenRows = if (scrollOffset == 0) (rows - max(1, (height / ch).toInt())).coerceAtLeast(0) else 0
+        val historySize = if (alternate) 0 else history.size
+        val start = (historySize - scrollOffset).coerceAtLeast(0)
+        val hiddenRows = if (scrollOffset == 0) (rows - max(1, (height / cellHeight).toInt())).coerceAtLeast(0) else 0
         val baseline = -paint.fontMetrics.ascent
+        val lineStart = start + hiddenRows
+        val historyIterator = if (historySize > 0) history.iterator() else null
+        repeat(minOf(lineStart, historySize)) { historyIterator?.next() }
+        val selectionA = selectionStart
+        val selectionB = selectionEnd
+        val selectionFirst = if (selectionA != null && selectionB != null && cellOrder(selectionA, selectionB) > 0) selectionB else selectionA
+        val selectionLast = if (selectionA != null && selectionB != null && cellOrder(selectionA, selectionB) > 0) selectionA else selectionB
         for (r in 0 until rows) {
-            val row = all.getOrNull(start + hiddenRows + r) ?: continue
+            val lineIndex = lineStart + r
+            val row = if (lineIndex < historySize) {
+                if (historyIterator?.hasNext() == true) historyIterator.next() else null
+            } else {
+                screen.getOrNull(lineIndex - historySize)
+            } ?: continue
             for (c in row.indices) {
-                val cell = row[c]; val px = c * cw; val py = r * ch
-                val here = Pair(start + r, c)
-                val selected = selectionStart?.let { a -> selectionEnd?.let { b -> cellOrder(here, a) >= 0 && cellOrder(here, b) <= 0 || cellOrder(here, b) >= 0 && cellOrder(here, a) <= 0 } } == true
-                if (selected || cell.bg != defaultBg) { paint.color = if (selected) 0xff35566c.toInt() else cell.bg; canvas.drawRect(px, py, px + cw, py + ch, paint) }
-                if (cell.char != ' ') { paint.color = cell.fg; canvas.drawText(cell.char.toString(), px, py + baseline, paint) }
+                val cell = row[c]; val px = c * cellWidth; val py = r * cellHeight
+                val selected = selectionFirst != null && selectionLast != null &&
+                    (lineIndex > selectionFirst.first || lineIndex == selectionFirst.first && c >= selectionFirst.second) &&
+                    (lineIndex < selectionLast.first || lineIndex == selectionLast.first && c <= selectionLast.second)
+                if (selected || cell.bg != defaultBg) { paint.color = if (selected) 0xff35566c.toInt() else cell.bg; canvas.drawRect(px, py, px + cellWidth, py + cellHeight, paint) }
+                if (cell.char != ' ') { paint.color = cell.fg; drawBuffer[c] = cell.char; canvas.drawText(drawBuffer, c, 1, px, py + baseline, paint) }
             }
         }
-        if (scrollOffset == 0 && hasFocus()) { paint.color = 0xff86b5ee.toInt(); val px = x.coerceAtMost(cols - 1) * cw; val py = (y - hiddenRows) * ch; if (py >= 0f) canvas.drawRect(px, py + ch - 3f, px + cw, py + ch, paint) }
+        if (scrollOffset == 0 && hasFocus()) { paint.color = 0xff86b5ee.toInt(); val px = x.coerceAtMost(cols - 1) * cellWidth; val py = (y - hiddenRows) * cellHeight; if (py >= 0f) canvas.drawRect(px, py + cellHeight - 3f, px + cellWidth, py + cellHeight, paint) }
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> { touchY = event.y; touchX = event.x; selecting = false; selectionStart = null; selectionEnd = null; requestFocus(); postDelayed(beginSelection, android.view.ViewConfiguration.getLongPressTimeout().toLong()); return true }
             MotionEvent.ACTION_MOVE -> {
                 if (selecting) { selectionEnd = touchCell(event.x, event.y); invalidate() }
-                else { val delta = ((event.y - touchY) / ch).toInt(); if (delta != 0) { removeCallbacks(beginSelection); scrollOffset = (scrollOffset + delta).coerceIn(0, history.size); touchY = event.y; invalidate() } }
+                else { val delta = ((event.y - touchY) / cellHeight).toInt(); if (delta != 0) { removeCallbacks(beginSelection); scrollOffset = (scrollOffset + delta).coerceIn(0, history.size); touchY = event.y; invalidate() } }
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { removeCallbacks(beginSelection); if (!selecting) performClick(); selecting = false; return true }

@@ -1,6 +1,7 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
-android { namespace="dev.wearbrdgeadb"; compileSdk=28
- defaultConfig { applicationId="dev.wearbrdgeadb"; minSdk=24; targetSdk=28; versionCode=34; versionName="1.32" }
+val requestTraceEnabled=providers.gradleProperty("wearbridgeTrace").orNull=="true"
+android { buildFeatures { buildConfig=true }; namespace="dev.wearbrdgeadb"; compileSdk=28
+ defaultConfig { applicationId="dev.wearbrdgeadb"; minSdk=24; targetSdk=28; versionCode=47; versionName="1.45"; buildConfigField("boolean","REQUEST_TRACE_ENABLED",requestTraceEnabled.toString()) }
  compileOptions { sourceCompatibility=JavaVersion.VERSION_1_8; targetCompatibility=JavaVersion.VERSION_1_8 }
  kotlinOptions { jvmTarget="1.8" }
 }

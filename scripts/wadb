@@ -22,15 +22,67 @@ if [[ "${1:-}" == configure ]]; then
 fi
 
 if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
-  echo "Usage: wadb [--shell|--root] COMMAND..."
+  echo "Usage: wadb [--shell|--root] [--normal|--stream] [--async] COMMAND..."
+  echo "       wadb [--shell|--root] [--datalayer|--wifi] push PHONE_FILE WATCH_PATH"
+  echo "       wadb [--shell|--root] [--datalayer|--wifi] pull WATCH_PATH PHONE_FILE"
+  echo "       --normal runs exactly one command (default); --stream opens an interactive PTY"
+  echo "       --wifi selects Wi-Fi for file bytes; command traffic always uses Wear Data Layer"
+  echo "       wadb install WATCH_APK_PATH"
+  echo "       wadb install-local --package PACKAGE PHONE_APK [--wifi|--datalayer]"
+  echo "       wadb [--root] doctor   Save one read-only watch diagnostic report"
+  echo "       wadb capture-logcat --duration SECONDS (--tag TAG|--pid PID) [--output FILE]"
+  echo "       wadb cancel REQUEST_ID   Cancel an active NORMAL request"
+  echo "       wadb job status|output|cancel JOB_ID"
   echo "       wadb status"
   echo "       wadb configure   Save the token copied from WearBridge Settings"
   exit 0
 fi
 
 mode=shell
-if [[ "${1:-}" == --root ]]; then mode=root; shift
-elif [[ "${1:-}" == --shell ]]; then mode=shell; shift
+execution=normal
+async=false
+transport=datalayer
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --root) mode=root; shift ;;
+    --shell) mode=shell; shift ;;
+    --normal) execution=normal; shift ;;
+    --stream) execution=stream; shift ;;
+    --async) async=true; shift ;;
+    --wifi) transport=wifi; shift ;;
+    --datalayer|--bluetooth) transport=datalayer; shift ;;
+    *) break ;;
+  esac
+done
+transfer=""
+if [[ "${1:-}" == push || "${1:-}" == pull ]]; then
+  transfer="$1"; shift
+  if [[ "$async" == true || "$execution" != normal || $# -ne 2 ]]; then echo "Usage: wadb [--shell|--root] [--datalayer|--wifi] $transfer PATH PATH" >&2; exit 2; fi
+  transfer_source="$1"; transfer_destination="$2"
+  if [[ "$transfer" == push ]]; then
+    [[ -f "$transfer_source" && -r "$transfer_source" ]] || { echo "Phone file is not readable: $transfer_source" >&2; exit 2; }
+    [[ "$transfer_destination" == /* && "$transfer_destination" != *$'\n'* && "$transfer_destination" != *$'\r'* ]] || { echo "Watch destination must be an absolute path without line breaks." >&2; exit 2; }
+  else
+    [[ "$transfer_source" == /* && "$transfer_source" != *$'\n'* && "$transfer_source" != *$'\r'* ]] || { echo "Watch source must be an absolute path without line breaks." >&2; exit 2; }
+    [[ ! -e "$transfer_destination" ]] || { echo "Refusing to overwrite existing phone file: $transfer_destination" >&2; exit 2; }
+    [[ -d "$(dirname "$transfer_destination")" ]] || { echo "Phone destination directory does not exist: $(dirname "$transfer_destination")" >&2; exit 2; }
+  fi
+fi
+
+if [[ "${1:-}" == install ]]; then
+  shift
+  if [[ $# -ne 1 || "$1" != /* || "${1,,}" != *.apk ]]; then
+    echo "Usage: wadb install /absolute/watch/path/app.apk" >&2
+    exit 2
+  fi
+  # This convenience command intentionally always uses Shizuku SHELL.
+  mode=shell
+  execution=normal
+  async=false
+  transport=datalayer
+  command_text="pm install -r $(printf '%q' "$1")"
+else
+  command_text=""
 fi
 
 token="${WADB_TOKEN:-}"
@@ -53,14 +105,324 @@ if [[ "${1:-}" == status ]]; then
   exit $?
 fi
 
-if [[ $# -eq 0 ]]; then
-  echo "Usage: wadb [--shell|--root] COMMAND..." >&2
+api_exec() {
+  local selected_mode="$1" selected_command="$2"
+  curl --silent --show-error --fail-with-body --config "$auth_config" --get \
+    --data-urlencode "mode=$selected_mode" --data-urlencode "execution=normal" \
+    --data-urlencode "async=false" --data-urlencode "command=$selected_command" \
+    http://127.0.0.1:18765/v1/exec
+}
+
+watch_stdout() {
+  local result_text
+  result_text="$(jq -r '.result // empty' <<<"$1")"
+  if [[ "$result_text" == *$'stdout:\n'* ]]; then
+    result_text="${result_text#*stdout:}"
+    result_text="${result_text#?}"
+    result_text="${result_text%$'\nstderr:'*}"
+    printf '%s' "$result_text"
+  fi
+}
+
+if [[ "${1:-}" == doctor ]]; then
+  shift
+  if [[ $# -ne 0 ]]; then echo "Usage: wadb [--root] doctor" >&2; exit 2; fi
+  log_dir="${XDG_STATE_HOME:-${HOME:?HOME is not set}/.local/state}/wearbridgeadb/diagnostics"
+  mkdir -p "$log_dir"; chmod 700 "$log_dir"
+  report="$log_dir/doctor-$(date -u +%Y%m%dT%H%M%SZ).log"
+  {
+    echo "WearBridge doctor · $(date -Is)"
+    echo "Device package: dev.wearbrdgeadb"
+    echo "API status:"
+    curl --silent --show-error --fail-with-body --config "$auth_config" http://127.0.0.1:18765/v1/status || echo "API status request failed (see stderr above)."
+    echo; echo "Watch SHELL diagnostics (read-only):"
+    diagnostic_command='id; echo "--- package version and permissions ---"; dumpsys package dev.wearbrdgeadb 2>&1 | grep -E "versionName=|versionCode=|requested permissions:|install permissions:|runtime permissions:|android.permission.(REQUEST_IGNORE_BATTERY_OPTIMIZATIONS|NEARBY_WIFI_DEVICES|BLUETOOTH_CONNECT|POST_NOTIFICATIONS)"; echo "--- device idle whitelist ---"; cmd deviceidle whitelist 2>&1'
+    api_exec shell "$diagnostic_command" || echo "SHELL diagnostic request failed (see stderr above)."
+    if [[ "$mode" == root ]]; then
+      echo; echo "Optional ROOT check (requested with --root; read-only):"
+      api_exec root 'id' || echo "ROOT diagnostic request failed (see stderr above)."
+    else
+      echo; echo "ROOT check: skipped (pass --root to request it)."
+    fi
+  } >"$report" 2>&1
+  chmod 600 "$report"
+  cat "$report"
+  printf '\nSaved diagnostic report: %s\n' "$report" >&2
+  exit 0
+fi
+
+if [[ "${1:-}" == capture-logcat ]]; then
+  shift
+  duration="" filter_type="" filter_value="" output_path=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --duration) [[ $# -ge 2 ]] || { echo "--duration needs seconds" >&2; exit 2; }; duration="$2"; shift 2 ;;
+      --tag) [[ $# -ge 2 ]] || { echo "--tag needs a tag" >&2; exit 2; }; filter_type=tag; filter_value="$2"; shift 2 ;;
+      --pid) [[ $# -ge 2 ]] || { echo "--pid needs a PID" >&2; exit 2; }; filter_type=pid; filter_value="$2"; shift 2 ;;
+      --output) [[ $# -ge 2 ]] || { echo "--output needs a path" >&2; exit 2; }; output_path="$2"; shift 2 ;;
+      *) echo "Unknown capture-logcat option: $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ "$duration" =~ ^[0-9]{1,3}$ ]] || { echo "Duration must be 1..300 seconds." >&2; exit 2; }
+  duration=$((10#$duration))
+  (( duration >= 1 && duration <= 300 )) || { echo "Duration must be 1..300 seconds." >&2; exit 2; }
+  if [[ "$filter_type" == tag ]]; then
+    [[ "$filter_value" =~ ^[A-Za-z0-9_.:-]+$ ]] || { echo "Tag contains unsupported characters." >&2; exit 2; }
+    logcat_command="logcat -v threadtime -s '$filter_value'"
+  elif [[ "$filter_type" == pid ]]; then
+    [[ "$filter_value" =~ ^[0-9]{1,10}$ ]] && (( 10#$filter_value > 0 && 10#$filter_value <= 2147483647 )) || { echo "PID must be in 1..2147483647." >&2; exit 2; }
+    logcat_command="logcat -v threadtime --pid=$filter_value"
+  else
+    echo "Choose exactly one filter: --tag TAG or --pid PID." >&2; exit 2
+  fi
+  if [[ -z "$output_path" ]]; then
+    if [[ -d "${HOME:?HOME is not set}/storage/downloads" ]]; then output_dir="$HOME/storage/downloads"
+    else output_dir="${XDG_STATE_HOME:-$HOME/.local/state}/wearbridgeadb/logs"; fi
+    mkdir -p "$output_dir"; chmod 700 "$output_dir"
+    output_path="$output_dir/watch-logcat-$(date -u +%Y%m%dT%H%M%SZ)-${filter_type}-${filter_value//[^A-Za-z0-9_.-]/_}.log"
+  else
+    [[ ! -e "$output_path" ]] || { echo "Refusing to overwrite: $output_path" >&2; exit 2; }
+    [[ -d "$(dirname "$output_path")" ]] || { echo "Output directory does not exist." >&2; exit 2; }
+  fi
+  job_command="/system/bin/timeout -s INT -k 2 ${duration}s $logcat_command"
+  job_json="$(curl --silent --show-error --fail-with-body --config "$auth_config" --get --data-urlencode "mode=$mode" --data-urlencode "execution=normal" --data-urlencode "async=true" --data-urlencode "command=$job_command" http://127.0.0.1:18765/v1/exec)" || exit $?
+  job_id="$(jq -er '.jobId' <<<"$job_json")"
+  echo "Started filtered logcat job $job_id for ${duration}s (SHELL, async)."
+  # Shizuku binding can be delayed independently of the capture duration.
+  # Keep 120 seconds for watch-side startup and 30 seconds for result delivery.
+  deadline=$((SECONDS + duration + 150))
+  while (( SECONDS < deadline )); do
+    job_state_json="$(curl --silent --show-error --fail-with-body --config "$auth_config" --get --data-urlencode "jobId=$job_id" http://127.0.0.1:18765/v1/jobs/status)" || exit $?
+    job_state="$(jq -r '.state // "unknown"' <<<"$job_state_json")"
+    case "$job_state" in completed|cancelled|failed|interrupted) break ;; esac
+    sleep 1
+  done
+  case "$job_state" in
+    completed|cancelled|failed|interrupted) ;;
+    *)
+      echo "Logcat job did not finish in the expected window (state=$job_state, jobId=$job_id); requesting cancellation." >&2
+      curl --silent --show-error --fail-with-body --max-time 15 --config "$auth_config" -X POST \
+        --url-query "jobId=$job_id" http://127.0.0.1:18765/v1/jobs/cancel >&2 || true
+      exit 1
+      ;;
+  esac
+  job_result="$(curl --silent --show-error --fail-with-body --config "$auth_config" --get --data-urlencode "jobId=$job_id" http://127.0.0.1:18765/v1/jobs/output)" || exit $?
+  {
+    echo "WearBridge watch logcat capture"
+    echo "Captured at: $(date -Is)"
+    echo "Filter: $filter_type=$filter_value"
+    echo "Requested duration: ${duration}s"
+    echo "Job: $job_id · mode=$mode · state=$job_state · exitCode=$(jq -r '.exitCode // "unknown"' <<<"$job_result")"
+    error_text="$(jq -r '.error // empty' <<<"$job_result")"
+    [[ -z "$error_text" ]] || echo "Job error: $error_text"
+    echo "--- job output ---"
+    jq -r '.output // "(no output)"' <<<"$job_result" | awk '/^stdout:$/ { inout=1; next } /^stderr:$/ { inout=0 } inout { print }'
+  } >"$output_path"
+  chmod 600 "$output_path"
+  echo "Saved watch logcat to $output_path"
+  if [[ "$(jq -r '.truncated // false' <<<"$job_result")" == true ]]; then echo "Warning: the API capped this job output at 2 MiB." >&2; fi
+  [[ "$job_state" == completed || "$job_state" == cancelled ]] || exit 1
+  exit 0
+fi
+
+if [[ "${1:-}" == install-local ]]; then
+  shift
+  package="" local_apk=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --package) [[ $# -ge 2 ]] || { echo "--package needs an application id" >&2; exit 2; }; package="$2"; shift 2 ;;
+      --wifi|--datalayer) transport="${1#--}"; [[ "$transport" == datalayer ]] && transport=datalayer; shift ;;
+      --*) echo "Unknown install-local option: $1" >&2; exit 2 ;;
+      *) [[ -z "$local_apk" ]] || { echo "Only one local APK is supported." >&2; exit 2; }; local_apk="$1"; shift ;;
+    esac
+  done
+  [[ "$package" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || { echo "Provide --package with a valid application id; no local APK metadata tool is bundled." >&2; exit 2; }
+  [[ -n "$local_apk" && -f "$local_apk" && -r "$local_apk" && "${local_apk,,}" == *.apk ]] || { echo "Usage: wadb install-local --package PACKAGE /absolute/or/relative/app.apk [--wifi|--datalayer]" >&2; exit 2; }
+  mode=shell
+  local_hash="$(sha256sum "$local_apk" | awk '{print $1}')"
+  install_id="$(< /proc/sys/kernel/random/uuid)"
+  watch_apk="/data/local/tmp/.wadb-install-${install_id}.apk"
+  echo "Uploading local APK over $transport: $local_apk"
+  transfer_bytes=$(wc -c < "$local_apk" | tr -d '[:space:]')
+  curl --silent --show-error --fail-with-body --config "$auth_config" --url-query "mode=shell" --url-query "transport=$transport" --url-query "path=$watch_apk" --header 'Content-Type: application/octet-stream' --header 'Expect:' --header "Content-Length: $transfer_bytes" --data-binary "@$local_apk" http://127.0.0.1:18765/v1/files/push || { echo "Upload failed or timed out; remote transfer state is unknown. Check $watch_apk before retrying." >&2; exit 1; }
+  printf '\nVerifying SHA-256 on watch...\n'
+  hash_result="$(api_exec shell "sha256sum $(printf '%q' "$watch_apk")")" || { echo "Hash request failed; uploaded file retained at $watch_apk" >&2; exit 1; }
+  watch_hash="$(watch_stdout "$hash_result" | awk 'NR==1 {print $1}')"
+  [[ "$watch_hash" == "$local_hash" ]] || { echo "SHA-256 mismatch. Local=$local_hash Watch=$watch_hash. Uploaded file retained at $watch_apk" >&2; exit 1; }
+  echo "SHA-256 verified: $local_hash"
+  install_result="$(api_exec shell "pm install -r $(printf '%q' "$watch_apk")")" || { echo "Install request failed; APK retained at $watch_apk" >&2; exit 1; }
+  install_exit="$(jq -r '.exitCode // 1' <<<"$install_result")"
+  watch_stdout "$install_result"
+  [[ "$install_exit" == 0 ]] || { echo "Install did not report success; APK retained at $watch_apk" >&2; exit 1; }
+  verify_result="$(api_exec shell "dumpsys package $(printf '%q' "$package") | grep -m1 -E 'versionName='; pm path $(printf '%q' "$package")")" || { echo "Install succeeded but package verification request failed; APK retained at $watch_apk" >&2; exit 1; }
+  verified_version="$(watch_stdout "$verify_result")"
+  [[ "$verified_version" == *versionName=* && "$verified_version" == *package:* ]] || { echo "Install command succeeded, but $package was not verified. APK retained at $watch_apk" >&2; exit 1; }
+  printf 'Verified installed package %s:\n%s\n' "$package" "$verified_version"
+  cleanup_result="$(api_exec shell "rm -f $(printf '%q' "$watch_apk")")" || { echo "Install verified; temporary APK cleanup request failed at $watch_apk" >&2; exit 1; }
+  [[ "$(jq -r '.exitCode // 1' <<<"$cleanup_result")" == 0 ]] || { echo "Install verified; temporary APK cleanup failed at $watch_apk" >&2; exit 1; }
+  echo "Temporary watch APK removed."
+  exit 0
+fi
+
+if [[ -n "$transfer" ]]; then
+  if [[ "$transfer" == push ]]; then
+    transfer_bytes=$(wc -c < "$transfer_source" | tr -d '[:space:]')
+    curl --silent --show-error --fail-with-body --config "$auth_config" \
+      --url-query "mode=$mode" --url-query "transport=$transport" --url-query "path=$transfer_destination" \
+      --header 'Content-Type: application/octet-stream' \
+      --header 'Expect:' \
+      --header "Content-Length: $transfer_bytes" \
+      --data-binary "@$transfer_source" \
+      http://127.0.0.1:18765/v1/files/push
+  else
+    temp_file="$(mktemp "${transfer_destination}.wadb.XXXXXX")"
+    if curl --silent --show-error --fail-with-body --config "$auth_config" \
+      --url-query "mode=$mode" --url-query "transport=$transport" --url-query "path=$transfer_source" \
+      --output "$temp_file" \
+      http://127.0.0.1:18765/v1/files/pull; then
+      mv -- "$temp_file" "$transfer_destination"
+      echo "Saved watch file to $transfer_destination"
+    else
+      rm -f -- "$temp_file"
+      exit 1
+    fi
+  fi
+  exit $?
+fi
+
+if [[ "${1:-}" == cancel ]]; then
+  shift
+  request_id="${1:-}"
+  if [[ $# -ne 1 || ! "$request_id" =~ ^[A-Fa-f0-9-]{36}$ ]]; then
+    echo "Usage: wadb cancel REQUEST_ID" >&2
+    exit 2
+  fi
+  curl --silent --show-error --fail-with-body --config "$auth_config" -X POST \
+    --url-query "requestId=$request_id" \
+    http://127.0.0.1:18765/v1/exec/cancel
+  exit $?
+fi
+
+if [[ "${1:-}" == job ]]; then
+  shift
+  action="${1:-}"; id="${2:-}"
+  if [[ $# -ne 2 || ! "$id" =~ ^[A-Fa-f0-9-]{36}$ || ! "$action" =~ ^(status|output|cancel)$ ]]; then
+    echo "Usage: wadb job status|output|cancel JOB_ID" >&2
+    exit 2
+  fi
+  shift 2
+  case "$action" in
+    status) endpoint="status" ;;
+    output) endpoint="output" ;;
+    cancel) endpoint="cancel" ;;
+  esac
+  if [[ "$action" == output ]]; then
+    log_dir="${XDG_STATE_HOME:-${HOME:?HOME is not set}/.local/state}/wearbridgeadb/jobs"
+    mkdir -p "$log_dir"; chmod 700 "$log_dir"
+    log_file="$log_dir/$id.json"
+    curl --silent --show-error --config "$auth_config" --get \
+      --data-urlencode "jobId=$id" \
+      "http://127.0.0.1:18765/v1/jobs/$endpoint" | tee "$log_file"
+    printf '\nSaved job response: %s\n' "$log_file" >&2
+  else
+    curl --silent --show-error --config "$auth_config" --get \
+      --data-urlencode "jobId=$id" \
+      "http://127.0.0.1:18765/v1/jobs/$endpoint"
+  fi
+  exit $?
+fi
+
+if [[ $# -eq 0 && -z "$command_text" && "$execution" != stream ]]; then
+  echo "Usage: wadb [--shell|--root] [--normal|--stream] COMMAND..." >&2
   echo "       wadb status" >&2
   exit 2
 fi
 
-command_text="$*"
-curl --silent --show-error --config "$auth_config" --get \
-  --data-urlencode "mode=$mode" \
-  --data-urlencode "command=$command_text" \
-  http://127.0.0.1:18765/v1/exec
+if [[ -z "$command_text" ]]; then command_text="$*"; fi
+
+if [[ "$execution" == stream ]]; then
+  if [[ "$async" == true ]]; then echo "--async cannot be combined with --stream." >&2; exit 2; fi
+  [[ -t 0 && -t 1 ]] || { echo "STREAM needs an interactive terminal (stdin and stdout must be a TTY)." >&2; exit 2; }
+  command_bytes=$(printf '%s' "$command_text" | wc -c | tr -d '[:space:]')
+  (( command_bytes <= 65536 )) || { echo "Initial command exceeds 65536 UTF-8 bytes." >&2; exit 2; }
+  open_json="$(curl --silent --show-error --fail-with-body --config "$auth_config" -X POST --url-query "mode=$mode" http://127.0.0.1:18765/v1/stream/open)" || exit $?
+  session_id="$(jq -er '.sessionId' <<<"$open_json")"
+  old_stty="$(stty -g)"
+  stream_temp="$(mktemp)"
+  stream_cursor=0
+  stream_cleanup() {
+    stty "$old_stty" 2>/dev/null || true
+    curl --silent --show-error --config "$auth_config" -X POST --url-query "sessionId=$session_id" http://127.0.0.1:18765/v1/stream/close >/dev/null 2>&1 || true
+    rm -f "$stream_temp"
+  }
+  trap stream_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  # Disable the local tty signal discipline so Ctrl+C/Z reach the remote PTY.
+  stty -echo -icanon -isig min 0 time 1
+  printf 'WearBridge STREAM · %s · Ctrl+C/D/Z and terminal keys go to the PTY · Ctrl+] closes this client\n' "$mode"
+  if [[ -n "$command_text" ]]; then printf '%s\r' "$command_text" | curl --silent --show-error --fail-with-body --config "$auth_config" -X POST --url-query "sessionId=$session_id" --header 'Content-Type: application/octet-stream' --data-binary @- http://127.0.0.1:18765/v1/stream/input >/dev/null; fi
+  read -r rows columns < <(stty size)
+  curl --silent --show-error --config "$auth_config" -X POST --url-query "sessionId=$session_id" --url-query "rows=$rows" --url-query "columns=$columns" http://127.0.0.1:18765/v1/stream/resize >/dev/null || true
+  last_size="$rows $columns"
+  while true; do
+    key=""
+    if IFS= read -r -s -N1 -t 0.02 key; then
+      if [[ "$key" == $'\035' ]]; then break; fi
+      printf '%s' "$key" | curl --silent --show-error --fail-with-body --config "$auth_config" -X POST --url-query "sessionId=$session_id" --header 'Content-Type: application/octet-stream' --data-binary @- http://127.0.0.1:18765/v1/stream/input >/dev/null || break
+    fi
+    read -r rows columns < <(stty size)
+    if [[ "$rows $columns" != "$last_size" ]]; then
+      curl --silent --show-error --config "$auth_config" -X POST --url-query "sessionId=$session_id" --url-query "rows=$rows" --url-query "columns=$columns" http://127.0.0.1:18765/v1/stream/resize >/dev/null || true
+      last_size="$rows $columns"
+    fi
+    response="$(curl --silent --show-error --fail-with-body --config "$auth_config" --get --data-urlencode "sessionId=$session_id" --data-urlencode "cursor=$stream_cursor" http://127.0.0.1:18765/v1/stream/output 2>/dev/null)" || break
+    next_cursor="$(jq -r '.cursor // empty' <<<"$response")"
+    if [[ -n "$next_cursor" ]]; then
+      encoded="$(jq -r '.data // ""' <<<"$response")"
+      if [[ -n "$encoded" ]]; then printf '%s' "$encoded" | base64 -d > "$stream_temp"; cat "$stream_temp"; fi
+      stream_cursor="$next_cursor"
+    fi
+    [[ "$(jq -r '.closed // false' <<<"$response")" == true ]] && break
+  done
+  exit 0
+fi
+
+if [[ "$execution" != normal ]]; then echo "Execution mode must be --normal or --stream." >&2; exit 2; fi
+command_bytes=$(printf '%s' "$command_text" | wc -c | tr -d '[:space:]')
+if (( command_bytes > 65536 )); then
+  echo "Command exceeds the API limit of 65536 UTF-8 bytes." >&2
+  exit 2
+fi
+if [[ "$async" == true ]]; then
+  curl --silent --show-error --config "$auth_config" --get \
+    --data-urlencode "mode=$mode" \
+    --data-urlencode "execution=normal" \
+    --data-urlencode "async=true" \
+    --data-urlencode "command=$command_text" \
+    http://127.0.0.1:18765/v1/exec
+else
+  request_id="$(< /proc/sys/kernel/random/uuid)"
+  cancel_normal() {
+    local code="$1"
+    trap - INT TERM HUP
+    printf '\nCtrl+C requested cancellation for watch request %s\n' "$request_id" >&2
+    curl --silent --show-error --fail-with-body --max-time 15 --config "$auth_config" -X POST \
+      --url-query "requestId=$request_id" \
+      http://127.0.0.1:18765/v1/exec/cancel >&2 || true
+    exit "$code"
+  }
+  trap 'cancel_normal 130' INT
+  trap 'cancel_normal 143' TERM HUP
+  printf 'requestId=%s (cancel with: wadb cancel %s)\n' "$request_id" "$request_id" >&2
+  curl --silent --show-error --config "$auth_config" --get \
+    --data-urlencode "mode=$mode" \
+    --data-urlencode "execution=normal" \
+    --data-urlencode "async=false" \
+    --data-urlencode "requestId=$request_id" \
+    --data-urlencode "command=$command_text" \
+    http://127.0.0.1:18765/v1/exec
+  result=$?
+  trap - INT TERM HUP
+  exit "$result"
+fi

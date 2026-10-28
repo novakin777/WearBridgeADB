@@ -2,8 +2,11 @@ package dev.wearbrdgeadb
 
 import android.app.Activity
 import android.content.ComponentName
+import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.provider.Settings
+import android.net.Uri
 import android.os.*
 import android.widget.*
 import rikka.shizuku.Shizuku
@@ -17,8 +20,8 @@ class MainActivity : Activity() {
  private val localizedViews=ArrayList<Pair<TextView,String>>()
  private fun localize(view:TextView,english:String){localizedViews.add(view to english);view.text=tr(english)}
  private fun tr(value:String):String{if(language!="ru")return value;return when(value){
-  "Watch status"->"Состояние часов";"Shell access and phone link"->"Доступ к shell и связь с телефоном";"SETUP & DIAGNOSTICS"->"НАСТРОЙКА И ДИАГНОСТИКА";"Shizuku permission"->"Разрешение Shizuku";"Shared storage access"->"Доступ к памяти";"Nearby Wi-Fi permission"->"Разрешение Nearby Wi-Fi";"Check shell identity · id"->"Проверить UID shell · id";"Shizuku is unavailable. Start the Shizuku server, then retry."->"Shizuku недоступен. Запустите сервер Shizuku и повторите.";"Shizuku unavailable"->"Shizuku недоступен";"Shizuku permission denied. Grant it first."->"Нет разрешения Shizuku. Сначала выдайте его.";"Binding shell UserService…"->"Подключение shell UserService…";"Phone link: disconnected"->"Телефон: нет связи";"Phone link: connected"->"Телефон: подключён";else->value}}
- private val args by lazy { Shizuku.UserServiceArgs(ComponentName(this, ShellUserService::class.java)).version(2).daemon(false).processNameSuffix("wearbridge") }
+  "Watch status"->"Состояние часов";"Shell access and phone link"->"Доступ к shell и связь с телефоном";"SETUP & DIAGNOSTICS"->"НАСТРОЙКА И ДИАГНОСТИКА";"REQUEST TRACE · LOCAL ONLY"->"ТРАССИРОВКА · ТОЛЬКО ЛОКАЛЬНО";"Shizuku permission"->"Разрешение Shizuku";"Shared storage access"->"Доступ к памяти";"Nearby Wi-Fi permission"->"Разрешение Nearby Wi-Fi";"Battery optimization"->"Оптимизация батареи";"Battery optimization exemption request opened"->"Открыт запрос на отключение оптимизации батареи";"Battery optimization is already exempted"->"Приложение уже исключено из оптимизации батареи";"Check shell identity · id"->"Проверить UID shell · id";"Shizuku is unavailable. Start the Shizuku server, then retry."->"Shizuku недоступен. Запустите сервер Shizuku и повторите.";"Shizuku unavailable"->"Shizuku недоступен";"Shizuku permission denied. Grant it first."->"Нет разрешения Shizuku. Сначала выдайте его.";"Binding shell UserService…"->"Подключение shell UserService…";"Phone link: disconnected"->"Телефон: нет связи";"Phone link: connected"->"Телефон: подключён";"Request trace · ON"->"Трассировка запросов · ВКЛ";"Request trace · OFF"->"Трассировка запросов · ВЫКЛ";"Refresh request trace"->"Обновить трассу запросов";"No trace entries yet"->"Записей трассы пока нет";"Clear watch trace"->"Очистить трассу часов";"Watch trace cleared"->"Трасса часов очищена";"Request trace is local: it records IDs, timings and watch power state, never command text."->"Трасса хранится локально: ID, время и состояние питания, без текста команд.";else->value}}
+ private val args by lazy { Shizuku.UserServiceArgs(ComponentName(this, ShellUserService::class.java)).version(5).tag("wearbridge-ui").daemon(false).processNameSuffix("wearbridge") }
  private var backend: ICmdService? = null
  private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
  private val connection = object : ServiceConnection {
@@ -46,8 +49,25 @@ class MainActivity : Activity() {
   val perm=watchButton("Shizuku permission") { if(!Shizuku.pingBinder()) status.text=tr("Shizuku is unavailable. Start the Shizuku server, then retry.") else if(Shizuku.checkSelfPermission()!=PackageManager.PERMISSION_GRANTED) Shizuku.requestPermission(1001) else refresh() }
   val storage=watchButton("Shared storage access") { requestStoragePermission() }
   val nearby=watchButton("Nearby Wi-Fi permission") { requestNearbyWifiPermission() }
+  val battery=watchButton("Battery optimization") { requestBatteryExemption() }
   val id=watchButton("Check shell identity · id") { runId() }
-  body.addView(perm);body.addView(storage);body.addView(nearby);body.addView(id)
+  body.addView(perm);body.addView(storage);body.addView(nearby);body.addView(battery);body.addView(id)
+  if(BuildConfig.REQUEST_TRACE_ENABLED){
+  body.addView(TextView(this).apply{textSize=10f;letterSpacing=.1f;typeface=android.graphics.Typeface.DEFAULT_BOLD;setTextColor(color(R.color.wb_on_surface_variant));setPadding(0,dp(18),0,dp(8));localize(this,"REQUEST TRACE · LOCAL ONLY")})
+  body.addView(TextView(this).apply{textSize=12f;setTextColor(color(R.color.wb_on_surface_variant));setPadding(0,0,0,dp(6));localize(this,"Request trace is local: it records IDs, timings and watch power state, never command text.")})
+  val traceOutput=TextView(this).apply{textSize=10f;typeface=android.graphics.Typeface.MONOSPACE;setTextColor(color(R.color.wb_on_surface));setPadding(dp(10),dp(8),dp(10),dp(8));background=rounded(color(R.color.wb_surface),dp(12));setTextIsSelectable(true)}
+  body.addView(Switch(this).apply{
+   isChecked=RequestTrace.isEnabled(this@MainActivity);text=tr(if(isChecked)"Request trace · ON" else "Request trace · OFF");textSize=13f;setTextColor(color(R.color.wb_on_surface))
+   setOnCheckedChangeListener{_,enabled->RequestTrace.setEnabled(this@MainActivity,enabled);text=tr(if(enabled)"Request trace · ON" else "Request trace · OFF");refreshTraceOutput(traceOutput)}
+  },LinearLayout.LayoutParams(-1,dp(48)))
+  body.addView(watchButton("Refresh request trace"){refreshTraceOutput(traceOutput)})
+  body.addView(watchButton("Clear watch trace"){
+   RequestTrace.clear(this@MainActivity)
+   refreshTraceOutput(traceOutput)
+   android.widget.Toast.makeText(this@MainActivity,tr("Watch trace cleared"),android.widget.Toast.LENGTH_SHORT).show()
+  })
+  body.addView(traceOutput);refreshTraceOutput(traceOutput)
+  }
   setContentView(scroll);scroll.requestApplyInsets();refresh();scope.launch { try { val nodes=Wearable.getNodeClient(this@MainActivity).connectedNodes.await(); if(nodes.isEmpty()) status.append("\n"+tr("Phone link: disconnected")) else status.append("\n"+tr("Phone link: connected")) } catch(e:Exception) { status.append("\nData Layer: ${e.message}") } }
  }
  private fun dp(value:Int)=(value*resources.displayMetrics.density+.5f).toInt()
@@ -65,14 +85,22 @@ class MainActivity : Activity() {
   if(Build.VERSION.SDK_INT<33 || checkSelfPermission(permission)==PackageManager.PERMISSION_GRANTED){refresh();return}
   requestPermissions(arrayOf(permission),1003)
  }
+ private fun requestBatteryExemption(){
+  val power=getSystemService(PowerManager::class.java)
+  if(power?.isIgnoringBatteryOptimizations(packageName)==true){status.text=tr("Battery optimization is already exempted");return}
+  try{startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,Uri.parse("package:$packageName")));status.text=tr("Battery optimization exemption request opened")}
+  catch(_:android.content.ActivityNotFoundException){try{startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))}catch(t:Throwable){status.text="Battery settings unavailable: ${t.message?:t.javaClass.simpleName}"}}
+ }
  override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<out String>,grantResults:IntArray){super.onRequestPermissionsResult(requestCode,permissions,grantResults);if(requestCode==1002||requestCode==1003)refresh()}
  private fun refresh() { if(!::status.isInitialized)return
   val available=Shizuku.pingBinder(); val granted=available && Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED
   val uid=if(available && granted) Shizuku.getUid().toString() else "unavailable"
   val storageGranted=checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED
   val nearbyGranted=Build.VERSION.SDK_INT<33 || checkSelfPermission("android.permission.NEARBY_WIFI_DEVICES")==PackageManager.PERMISSION_GRANTED
-  status.text=if(language=="ru")"SHIZUKU     ${if(available)"ДОСТУПЕН" else "НЕДОСТУПЕН"}\nРАЗРЕШЕНИЕ  ${if(granted)"ЕСТЬ" else "НЕТ"}\nUID СЕРВИСА $uid${if(uid=="0")" · ROOT" else ""}\nUSER SERVICE ${if(backend==null)"НЕАКТИВЕН" else "АКТИВЕН"}\nПАМЯТЬ     ${if(storageGranted)"ДОСТУПНА" else "НЕТ ДОСТУПА"}\nNEARBY WI-FI ${if(nearbyGranted)"ДОСТУПЕН" else "НЕТ ДОСТУПА"}" else "SHIZUKU     ${if(available)"AVAILABLE" else "UNAVAILABLE"}\nPERMISSION  ${if(granted)"GRANTED" else "DENIED"}\nBACKEND UID $uid${if(uid=="0")" · ROOT" else ""}\nUSER SERVICE ${if(backend==null)"INACTIVE" else "ACTIVE"}\nSTORAGE     ${if(storageGranted)"GRANTED" else "NOT GRANTED"}\nNEARBY WI-FI ${if(nearbyGranted)"GRANTED" else "NOT GRANTED"}"
+  val batteryExempt=getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)==true
+  status.text=if(language=="ru")"SHIZUKU     ${if(available)"ДОСТУПЕН" else "НЕДОСТУПЕН"}\nРАЗРЕШЕНИЕ  ${if(granted)"ЕСТЬ" else "НЕТ"}\nUID СЕРВИСА $uid${if(uid=="0")" · ROOT" else ""}\nUSER SERVICE ${if(backend==null)"НЕАКТИВЕН" else "АКТИВЕН"}\nПАМЯТЬ     ${if(storageGranted)"ДОСТУПНА" else "НЕТ ДОСТУПА"}\nNEARBY WI-FI ${if(nearbyGranted)"ДОСТУПЕН" else "НЕТ ДОСТУПА"}\nБАТАРЕЯ   ${if(batteryExempt)"ИСКЛЮЧЁН" else "ОПТИМИЗАЦИЯ ВКЛЮЧЕНА"}" else "SHIZUKU     ${if(available)"AVAILABLE" else "UNAVAILABLE"}\nPERMISSION  ${if(granted)"GRANTED" else "DENIED"}\nBACKEND UID $uid${if(uid=="0")" · ROOT" else ""}\nUSER SERVICE ${if(backend==null)"INACTIVE" else "ACTIVE"}\nSTORAGE     ${if(storageGranted)"GRANTED" else "NOT GRANTED"}\nNEARBY WI-FI ${if(nearbyGranted)"GRANTED" else "NOT GRANTED"}\nBATTERY     ${if(batteryExempt)"EXEMPT" else "OPTIMIZATION ACTIVE"}"
  }
+ private fun refreshTraceOutput(view:TextView){view.text=RequestTrace.read(this).ifBlank{tr("No trace entries yet")}}
  private fun runId() {
   if(!Shizuku.pingBinder()) { status.text=tr("Shizuku unavailable"); return }
   if(Shizuku.checkSelfPermission()!=PackageManager.PERMISSION_GRANTED) { status.text=tr("Shizuku permission denied. Grant it first."); return }

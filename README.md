@@ -12,7 +12,7 @@
 
 ## Состояние реализации
 
-- Актуальные APK на дату последнего обновления: Phone 1.31 и Wear 1.17. Телефон содержит разделы Terminal / Files / Settings и ручной выбор языка. Полноэкранный STREAM использует собственный `BridgeTerminalView` поверх активного Wear Channel; размеры терминала передаются в PTY часов через `TIOCSWINSZ`.
+- Текущие версии APK: Phone 1.45 и Wear 1.33. В телефонной шапке показывается имя подключённых часов; доступны Terminal / Files / Settings и ручной выбор языка. Полноэкранный STREAM использует собственный `BridgeTerminalView` поверх активного Wear Channel; размеры терминала передаются в PTY часов через `TIOCSWINSZ`.
 
 - NORMAL — команда отправляется MessageClient и выполняется через Shizuku UserService; на экране показывается только фактический вывод команды без эха `$ команда`, request ID и служебных меток stdout/stderr/exit code. Классификации команд нет: `logcat` остаётся обычной командой и не переключает режим.
 - STREAM — ручное включение открывает ChannelClient и одну интерактивную `/system/bin/sh -i` с настоящим PTY. Native PTY собирается для arm64 и armeabi-v7a (часы могут запускать 32-битные процессы на 64-битном SoC); line discipline передаёт Ctrl+C/Z/D/\\, Enter, Tab и ANSI стрелки. Закрытие канала завершает именно shell-сессию.
@@ -20,7 +20,9 @@
 - На телефоне профиль выполнения выбирается вручную: SHELL или ROOT. Часы получили root через jailbreak пользователя; разрешение приложению выдаётся в KernelSU. SHELL выполняется через Shizuku UserService. ROOT запускает только виртуальный `/system/bin/su` из UID самого WearBridgeADB приложения на часах: KernelSU sucompat перехватывает этот точный путь для разрешённого UID. `/system/xbin/su` не используется. Если KernelSU не разрешает этот путь, Wear v6 выводит UID приложения и диагностическое сообщение. SHELL использует текущий UID Shizuku, поэтому если сам Shizuku запущен как root, даже профиль SHELL останется UID 0.
 - Кнопка **TERMUX API** включает/выключает HTTP API только на loopback телефона (`127.0.0.1:18765`). Bearer token хранится в private app files; включайте API только на время использования.
 - На часах отображается доступность Shizuku, permission и UID; `Test id` вызывает UserService. При запуске Shizuku через ADB ожидается `uid=2000(shell)`, через root backend — UID 0.
-- На Xiaomi Watch 5 проверен живой resize PTY: `stty size` меняется при появлении клавиатуры и повороте экрана. Wear 1.17 добавляет доставку `/terminal/resize` в сервис часов.
+- Пока STREAM PTY открыт, watch service удерживается foreground notification и частичным `PARTIAL_WAKE_LOCK`; lock отпускается при закрытии сессии. В настройках часов есть ручной запрос исключения приложения из оптимизации батареи и отображение статуса. Это снижает шанс остановки CPU во время сессии, но Android/Wear OS всё равно могут ограничить сеть или завершить приложение; гарантированного запрета Doze нет.
+- В файловом браузере выберите один APK и откройте **⋮ → Install selected APK** либо нажмите **Install** на нижней панели выделения. Установка выполняется через Shizuku SHELL. В локальном API доступна команда `./scripts/wadb install /sdcard/Download/app.apk`.
+- На Xiaomi Watch 5 ранее проверен живой resize PTY: `stty size` меняется при появлении клавиатуры и повороте экрана. Wear 1.17 добавил доставку `/terminal/resize`; в 1.18 добавлены настройки питания для активного STREAM.
 
 ## Toolchain и сборка в Termux
 
@@ -67,9 +69,22 @@ cd ~/wearbrdgeadb
 ./scripts/wadb --root id
 ./scripts/wadb --root 'getprop ro.build.fingerprint'
 ./scripts/wadb --shell 'dumpsys battery'
+./scripts/wadb --shell --normal 'logcat -d'
+./scripts/wadb --shell --stream
 ```
 
-В Settings нажмите **Copy API token**, затем в Termux выполните `./scripts/wadb configure` и вставьте токен. Клиент хранит его в `~/.config/wearbridgeadb/token` с правами доступа только владельцу; root на телефоне и Termux:API plugin не нужны. `WADB_TOKEN` можно задать через окружение вместо файла. Профиль `--root` относится только к часам и требует разрешённого root backend на часах. API поддерживает `GET /v1/status` и `GET /v1/exec?mode=shell|root&command=...`; длинная команда ограничена 4096 символами. Остановите API той же кнопкой после работы.
+Чтобы настроить Bearer-токен: в WearBridge на телефоне включите **TERMUX API** и нажмите **Copy API token**. В Termux из корня проекта выполните `./scripts/wadb configure`; вставьте скопированный токен в скрытый запрос ввода и нажмите Enter. `wadb` сохранит его в `~/.config/wearbridgeadb/token` с правами доступа только владельцу. Не отправляйте токен в чат, не добавляйте его в командную строку и не публикуйте. Root на телефоне и Termux:API plugin не нужны. `WADB_TOKEN` можно задать через окружение вместо файла. Профиль `--root` относится только к часам и требует разрешённого root backend на часах. `--normal` выполняет одну команду (это значение по умолчанию); `--stream` вручную открывает постоянную интерактивную PTY-сессию, при желании с начальной командой. Режим не выбирается по имени команды: даже `logcat` выполняется ровно в указанном режиме. В CLI STREAM клавиши Ctrl+C/D/Z и стрелки передаются PTY; Ctrl+] закрывает клиент и удалённую сессию. Команды идут через Wear Data Layer независимо от выбора файлового транспорта. Файловые `push/pull` используют Data Layer по умолчанию, а `--wifi` явно включает Wi-Fi для байтов файла. Примеры:
+
+```sh
+./scripts/wadb --shell --normal 'id'
+./scripts/wadb --root --stream 'logcat'
+./scripts/wadb --shell --wifi push ./app.apk /sdcard/Download/app.apk
+./scripts/wadb --shell --datalayer pull /sdcard/Download/log.txt ./log.txt
+```
+
+Одиночные запросы используют `/v1/exec`, а STREAM открывает ChannelClient только на время активной PTY-сессии. Размер команды ограничен 65536 байт UTF-8. Команда `./scripts/wadb install /sdcard/Download/app.apk` устанавливает APK на часах через Shizuku SHELL независимо от выбранного ROOT-профиля. Остановите API той же кнопкой после работы. Для NORMAL клиент печатает requestId перед запуском; Ctrl+C отправляет часам запрос отмены. Если клиент прерван отдельно, выполните ./scripts/wadb cancel REQUEST_ID. Для --async используйте ./scripts/wadb job cancel JOB_ID. Статус async-job содержит `stage` и `lastActivityAt` помимо `updatedAt`: это показывает этап моста и время последнего перехода, но не гарантирует, что команда выдаёт потоковый вывод. Ответ cancel_sent/cancel_requested подтверждает отправку, но не остановку процесса: проверьте итоговый ответ или состояние job. Отмена best-effort и может не остановить потомков shell-команды.
+
+В **Settings → Diagnostics** можно включить локальную трассировку запросов на телефоне и отдельно на часах. Она записывает этапы Data Layer, ожидание ответа, отмену, async-job и состояние питания часов; текст команд не записывается и данные никуда не отправляются. При задержке включите её на обоих устройствах заранее, повторите короткую команду и скопируйте обе трассы. Получение Shizuku UserService на часах теперь выполняется через отдельный single-flight worker; ожидание backend ограничено 15 секундами. Если сам Binder-вызов завис, запрос вернёт ошибку по таймауту, а единственная bind-попытка останется в фоне до завершения — повторные команды не создают очередь bind-вызовов.
 
 API не доступен с Wi-Fi/LAN: сервер привязан только к IPv4 loopback `127.0.0.1`, сервис не экспортирован, запросы требуют случайный bearer token.
 

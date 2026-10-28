@@ -6,15 +6,17 @@ Local Android/Wear OS project for running commands on a paired watch through Shi
 
 ## Current implementation
 
-- Phone 1.32 and Wear 1.17. The phone app has Terminal, Files, and Settings sections with a manual language switch. Fullscreen STREAM uses the project-owned `BridgeTerminalView` over the existing Wear Channel; terminal size changes are sent to the watch PTY through `TIOCSWINSZ`.
+- Current APK versions: Phone 1.45 and Wear 1.33. The phone header displays the connected watch name; the app has Terminal, Files, and Settings sections with a manual language switch. Fullscreen STREAM uses the project-owned `BridgeTerminalView` over the existing Wear Channel; terminal size changes are sent to the watch PTY through `TIOCSWINSZ`.
 - NORMAL sends one command through MessageClient and Shizuku UserService, and displays its output. Commands are not classified: `logcat` in NORMAL does not switch modes.
 - STREAM is enabled manually and opens one interactive `/system/bin/sh -i` session with a PTY through ChannelClient. The native PTY is built for arm64 and armeabi-v7a. Ctrl+C/Z/D, Ctrl+\\, Enter, Tab, and ANSI arrow sequences are sent through the PTY line discipline. Closing the channel ends the shell session.
 - SHELL and ROOT are selected manually. SHELL uses the active Shizuku identity. ROOT uses the separately approved `/system/bin/su` path on the watch through KernelSU. ROOT is available only if the watch grants the app access. The selected profile is not inferred from the command.
 - The optional Termux API listens only on phone loopback (`127.0.0.1:18765`) and authenticates requests with a private bearer token.
+- While the STREAM PTY is open, the watch service uses a foreground notification and a partial `PARTIAL_WAKE_LOCK`, released when the session closes. Watch settings include a user-triggered battery-optimization exemption request and report its status. This lowers the chance of CPU suspension during a session, but Android/Wear OS may still restrict networking or terminate the process; Doze cannot be disabled absolutely.
+- Select a single APK in the watch file browser and choose **⋮ → Install selected APK**, or tap **Install** in the bottom selection bar. It runs `pm install -r` through Shizuku SHELL. The local API also provides `./scripts/wadb install /sdcard/Download/app.apk`.
 
 ## Important: commands run directly
 
-The user chooses NORMAL or STREAM and SHELL or ROOT. WearBridge provides almost no protection against operator mistakes: a command can change or delete files, stop services, modify settings, or damage the watch system. In ROOT mode, commands run with root privileges on the watch. There is no command sandbox or dangerous-command analysis. Check the command, mode, and profile before running it; do not paste commands you have not reviewed.
+The user chooses NORMAL or STREAM and SHELL or ROOT. Commands run directly on the watch with the selected privileges and can change or delete files, stop services, or modify settings. In ROOT mode, commands run with root privileges. WearBridge does not sandbox commands or assess their effects, so review the command, mode, and profile before running it.
 
 The phone-side Termux API also grants command access through its bearer token. Keep the token private and enable the API only while using it. The API binds to `127.0.0.1`, but another local process on the phone that has the token can use it.
 
@@ -55,23 +57,36 @@ Local signing uses `apksigner.jar` and `keys/wearbridge-project.p12`. The passwo
 ## Termux API without phone root
 
 1. In phone Settings, enable **TERMUX API**. Android shows a persistent notification while the server is running.
-2. Tap **Copy API token** in Settings.
+2. Tap **Copy API token** in Settings. This copies the secret for you to paste into the Termux prompt; do not send it in chat or put it in a command line.
 3. In Termux, install curl (`pkg install curl`), then configure the included client:
 
    ```sh
    ./scripts/wadb configure
    ```
 
-   Paste the token when prompted. The client saves it to `~/.config/wearbridgeadb/token` with owner-only permissions. Root on the phone and the Termux:API plugin are not required. Alternatively, provide the secret using `WADB_TOKEN`.
+   Paste the copied token into the hidden prompt and press Enter. The client saves it to `~/.config/wearbridgeadb/token` with owner-only permissions. Root on the phone and the Termux:API plugin are not required. Alternatively, provide the secret using `WADB_TOKEN` from an already-secured environment.
 4. Use the client:
 
    ```sh
    ./scripts/wadb status
    ./scripts/wadb --shell id
    ./scripts/wadb --root 'getprop ro.build.fingerprint'
+./scripts/wadb --shell --normal 'logcat -d'
+./scripts/wadb --shell --stream
    ```
 
-`--root` selects watch-side ROOT execution; it does not require root in Termux. The API supports `GET /v1/status` and `GET /v1/exec?mode=shell|root&command=...`, with commands limited to 4096 characters. Stop the API from phone Settings when finished.
+`--root` selects watch-side ROOT execution; it does not require root in Termux. `--normal` runs one command (the default); `--stream` manually opens one persistent interactive PTY, optionally sending an initial command. The mode is never inferred from a command name: `logcat` runs exactly in the selected mode. In CLI STREAM, Ctrl+C/D/Z and arrows go to the PTY; Ctrl+] closes the client and remote session. Commands always use Wear Data Layer. File `push/pull` uses Data Layer by default; `--wifi` explicitly selects Wi-Fi for file bytes. For example:
+
+```sh
+./scripts/wadb --shell --normal id
+./scripts/wadb --root --stream logcat
+./scripts/wadb --shell --wifi push ./app.apk /sdcard/Download/app.apk
+./scripts/wadb --shell --datalayer pull /sdcard/Download/log.txt ./log.txt
+```
+
+Single requests use `/v1/exec`; STREAM opens ChannelClient only while a PTY session is active. Commands are limited to 65536 UTF-8 bytes. Run `./scripts/wadb install /sdcard/Download/app.apk` to install a watch-side APK through Shizuku SHELL regardless of the selected ROOT profile. Stop the API from phone Settings when finished. For NORMAL, wadb prints a requestId before execution; Ctrl+C sends a watch cancellation request. If the client was interrupted separately, run ./scripts/wadb cancel REQUEST_ID. For --async, use ./scripts/wadb job cancel JOB_ID. Job status includes `stage` and `lastActivityAt` alongside `updatedAt`, so clients can see the bridge phase and last phase transition; this does not guarantee that a command is producing streaming output. A cancel_sent/cancel_requested response confirms dispatch, not process termination: check the final response or job state. Cancellation is best effort and may not stop shell descendants.
+
+**Settings → Diagnostics** provides opt-in local request tracing on the phone and watch. It records Data Layer phases, response waits, cancellation, async-job stages, and watch power state. It never records command text or sends telemetry off-device. Enable it on both devices before reproducing a delay, then copy both traces. Watch Shizuku UserService binding now runs on a dedicated single-flight worker; callers wait at most 15 seconds for the backend. If the Binder call itself stalls, the request times out while the single bind attempt remains in the background; further commands do not queue duplicate bind calls.
 
 The service is not exported, binds only to IPv4 loopback, and requires the bearer token. It is not available over Wi-Fi or LAN.
 
