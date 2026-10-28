@@ -59,21 +59,51 @@ cd ~/wearbrdgeadb
 3. Откройте WearBridgeADB на часах, нажмите **Request Shizuku permission**, подтвердите разрешение в Shizuku, затем нажмите **Test id**. Проверьте строку `uid=2000(shell)`.
 4. Откройте приложение на телефоне. Статус должен показать обнаруженные часы. Выберите NORMAL или STREAM вручную. Профиль ROOT тоже включается вручную; при необходимости подтвердите root grant на часах.
 
-## Termux API
+## Подключить Termux API: пошагово
 
-1. Запустите WearBridgeADB на телефоне и нажмите **TERMUX API · OFF**, чтобы включить локальный API. Android покажет постоянное уведомление, пока API работает.
-2. В Termux установите `curl` (`pkg install curl`) и запустите клиент из папки проекта:
+Выполняй шаги по порядку. `install.sh` для настройки API не нужен: он относится к установке APK через ADB.
+
+### 1. Скачай клиент в Termux
+
+Открой Termux на телефоне и вставь блок целиком:
+
+```sh
+pkg update
+pkg install git curl
+cd ~
+git clone https://github.com/novakin777/WearBridgeADB.git
+cd WearBridgeADB
+```
+
+Если папка `~/WearBridgeADB` уже существует, пропусти строку `git clone` и выполни `cd ~/WearBridgeADB`.
+
+### 2. Скопируй токен в приложении телефона
+
+Открой WearBridgeADB на телефоне → **Settings** → включи **TERMUX API** → нажми **Copy API token**. Токен скопируется в буфер обмена телефона.
+
+### 3. Сохрани токен в Termux
+
+Вернись в Termux. Если ты закрывал Termux, сначала снова перейди в папку клиента:
+
+```sh
+cd ~/WearBridgeADB
+./scripts/wadb configure
+```
+
+Появится запрос `Paste the API token copied from WearBridge Settings:`. Вставь токен долгим нажатием в Termux и нажми Enter. **При вставке символы не показываются — это нормально.** После сохранения Termux напишет путь к файлу токена. `wadb` сам будет брать токен из `~/.config/wearbridgeadb/token`; вручную открывать или редактировать этот файл не нужно.
+
+Не отправляй токен в чат, не вставляй его в команду и не добавляй в Git. Копировать и вставлять его должен пользователь. Root на телефоне и отдельное приложение Termux:API не нужны.
+
+### 4. Проверь подключение
 
 ```sh
 ./scripts/wadb status
-./scripts/wadb --root id
-./scripts/wadb --root 'getprop ro.build.fingerprint'
-./scripts/wadb --shell 'dumpsys battery'
-./scripts/wadb --shell --normal 'logcat -d'
-./scripts/wadb --shell --stream
+./scripts/wadb --shell id
 ```
 
-Чтобы настроить Bearer-токен: в WearBridge на телефоне включите **TERMUX API** и нажмите **Copy API token**. В Termux из корня проекта выполните `./scripts/wadb configure`; вставьте скопированный токен в скрытый запрос ввода и нажмите Enter. `wadb` сохранит его в `~/.config/wearbridgeadb/token` с правами доступа только владельцу. Не отправляйте токен в чат, не добавляйте его в командную строку и не публикуйте. Root на телефоне и Termux:API plugin не нужны. `WADB_TOKEN` можно задать через окружение вместо файла. Профиль `--root` относится только к часам и требует разрешённого root backend на часах. `--normal` выполняет одну команду (это значение по умолчанию); `--stream` вручную открывает постоянную интерактивную PTY-сессию, при желании с начальной командой. Режим не выбирается по имени команды: даже `logcat` выполняется ровно в указанном режиме. В CLI STREAM клавиши Ctrl+C/D/Z и стрелки передаются PTY; Ctrl+] закрывает клиент и удалённую сессию. Команды идут через Wear Data Layer независимо от выбора файлового транспорта. Файловые `push/pull` используют Data Layer по умолчанию, а `--wifi` явно включает Wi-Fi для байтов файла. Примеры:
+Если `status` сообщает, что API недоступен, вернись в приложение WearBridge на телефоне и проверь, что **TERMUX API** включён. Когда закончишь, выключи его там же. Далее команды выполняются выбранным вручную профилем `--shell` или `--root` и режимом `--normal` или `--stream`; режим сам по команде не переключается.
+
+Файловые `push/pull` используют Wear Data Layer по умолчанию, а `--wifi` явно выбирает Wi-Fi для передачи содержимого файлов. Примеры:
 
 ```sh
 ./scripts/wadb --shell --normal 'id'

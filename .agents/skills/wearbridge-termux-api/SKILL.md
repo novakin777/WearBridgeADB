@@ -9,10 +9,34 @@ Use this skill when a user asks to inspect or control the paired watch from Term
 
 ## Setup once
 
-1. Find the WearBridge checkout and use its `scripts/wadb` client.
-2. Tell the user where to copy it: on the phone, open WearBridge Settings, enable **TERMUX API**, and tap **Copy API token**. The user copies the bearer token themselves. Never read app-private files, inspect the clipboard, or retrieve/copy the token for them.
-3. In Termux, change to the WearBridge project root and run `./scripts/wadb configure`. The user pastes the copied token into the hidden prompt and presses Enter. This stores it at `${XDG_CONFIG_HOME:-$HOME/.config}/wearbridgeadb/token` with mode `600`, where `scripts/wadb` reads it automatically. Do not put the token in chat, command arguments, shell history, logs, or repository files. `wadb` runs as the ordinary phone user and does not need phone root; most phones are not rooted. The separate Termux:API plugin is not required. `WADB_TOKEN` can supply the token from an already-secured environment instead.
-4. Check availability with `./scripts/wadb status`.
+If the user does not already have the WearBridge checkout in Termux, give these exact commands:
+
+```sh
+pkg update
+pkg install git curl
+cd ~
+git clone https://github.com/novakin777/WearBridgeADB.git
+cd ~/WearBridgeADB
+```
+
+If `~/WearBridgeADB` already exists, skip `git clone` and just run `cd ~/WearBridgeADB`. Do not direct the user to `install.sh` for API setup; it is unrelated ADB APK installation.
+
+1. On the phone, open WearBridge Settings, turn **TERMUX API** on, and tap **Copy API token**. The user copies the bearer token themselves. Never read app-private files, inspect the clipboard, or retrieve/copy the token for them.
+2. In Termux, from the repository root, run:
+
+   ```sh
+   ./scripts/wadb configure
+   ```
+
+   The user long-presses the prompt and pastes the token, then presses Enter. Explain that the pasted characters are hidden; this is expected. The command saves the token to `${XDG_CONFIG_HOME:-$HOME/.config}/wearbridgeadb/token` with mode `600`, where `scripts/wadb` reads it automatically. Do not put the token in chat, command arguments, shell history, logs, or repository files.
+3. Confirm setup:
+
+   ```sh
+   ./scripts/wadb status
+   ./scripts/wadb --shell id
+   ```
+
+`wadb` runs as the ordinary phone user and does not need phone root; most phones are not rooted. The separate Termux:API Android plugin is not required. `WADB_TOKEN` can supply the token from an already-secured environment instead.
 
 Do not read or print the token, include it in command output, or put it in logs. If the API is stopped or unavailable, ask the user to enable it in WearBridge Settings. The service authenticates with a bearer token and binds only to `127.0.0.1:18765` on the phone; do not forward it to LAN/Wi-Fi or `0.0.0.0`.
 

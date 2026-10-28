@@ -54,28 +54,51 @@ Local signing uses `apksigner.jar` and `keys/wearbridge-project.p12`. The passwo
 3. On the watch, open WearBridgeADB, tap **Request Shizuku permission**, grant it in Shizuku, then tap **Test id**. With Shizuku started through ADB, expect `uid=2000(shell)`.
 4. Open WearBridgeADB on the phone and select NORMAL or STREAM manually. SHELL/ROOT is also a manual choice; approve the root grant on the watch when prompted.
 
-## Termux API without phone root
+## Set up the Termux API, step by step
 
-1. In phone Settings, enable **TERMUX API**. Android shows a persistent notification while the server is running.
-2. Tap **Copy API token** in Settings. This copies the secret for you to paste into the Termux prompt; do not send it in chat or put it in a command line.
-3. In Termux, install curl (`pkg install curl`), then configure the included client:
+Follow these steps in order. You do **not** need `install.sh` to set up the API; that script is only for installing APKs through ADB.
 
-   ```sh
-   ./scripts/wadb configure
-   ```
+### 1. Download the client in Termux
 
-   Paste the copied token into the hidden prompt and press Enter. The client saves it to `~/.config/wearbridgeadb/token` with owner-only permissions. Root on the phone and the Termux:API plugin are not required. Alternatively, provide the secret using `WADB_TOKEN` from an already-secured environment.
-4. Use the client:
+Open Termux on your phone and paste this whole block:
 
-   ```sh
-   ./scripts/wadb status
-   ./scripts/wadb --shell id
-   ./scripts/wadb --root 'getprop ro.build.fingerprint'
-./scripts/wadb --shell --normal 'logcat -d'
-./scripts/wadb --shell --stream
-   ```
+```sh
+pkg update
+pkg install git curl
+cd ~
+git clone https://github.com/novakin777/WearBridgeADB.git
+cd WearBridgeADB
+```
 
-`--root` selects watch-side ROOT execution; it does not require root in Termux. `--normal` runs one command (the default); `--stream` manually opens one persistent interactive PTY, optionally sending an initial command. The mode is never inferred from a command name: `logcat` runs exactly in the selected mode. In CLI STREAM, Ctrl+C/D/Z and arrows go to the PTY; Ctrl+] closes the client and remote session. Commands always use Wear Data Layer. File `push/pull` uses Data Layer by default; `--wifi` explicitly selects Wi-Fi for file bytes. For example:
+If `~/WearBridgeADB` already exists, skip the `git clone` line and run `cd ~/WearBridgeADB` instead.
+
+### 2. Copy the token in the phone app
+
+Open WearBridgeADB on your phone → **Settings** → turn **TERMUX API** on → tap **Copy API token**. The token is now in your phone clipboard.
+
+### 3. Save the token in Termux
+
+Return to Termux. If you closed Termux, first return to the client folder:
+
+```sh
+cd ~/WearBridgeADB
+./scripts/wadb configure
+```
+
+When Termux shows `Paste the API token copied from WearBridge Settings:`, long-press and tap **Paste**, then press Enter. **The pasted characters stay invisible; this is expected.** Termux will print the saved file path. `wadb` reads the token from `~/.config/wearbridgeadb/token` automatically. You do not need to open or edit that file.
+
+Do not send the token in chat, put it in a command, or commit it to Git. The user must copy and paste the token. Phone root and the separate Termux:API app are not required.
+
+### 4. Check the connection
+
+```sh
+./scripts/wadb status
+./scripts/wadb --shell id
+```
+
+If `status` says the API is unavailable, return to WearBridge on the phone and make sure **TERMUX API** is on. Turn it off in the app when finished. Choose `--shell` or `--root` and `--normal` or `--stream` explicitly; the mode is never inferred from the command.
+
+File `push/pull` uses Wear Data Layer by default. Add `--wifi` to explicitly use Wi-Fi for file bytes. Examples:
 
 ```sh
 ./scripts/wadb --shell --normal id
