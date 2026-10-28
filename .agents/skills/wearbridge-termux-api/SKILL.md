@@ -19,7 +19,7 @@ git clone https://github.com/novakin777/WearBridgeADB.git
 cd ~/WearBridgeADB
 ```
 
-If `~/WearBridgeADB` already exists, skip `git clone` and just run `cd ~/WearBridgeADB`. Do not direct the user to `install.sh` for API setup; it is unrelated ADB APK installation.
+If `~/WearBridgeADB` already exists, skip `git clone` and just run `cd ~/WearBridgeADB`.
 
 1. On the phone, open WearBridge Settings, turn **TERMUX API** on, and tap **Copy API token**. The user copies the bearer token themselves. Never read app-private files, inspect the clipboard, or retrieve/copy the token for them.
 2. In Termux, from the repository root, run:

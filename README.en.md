@@ -44,19 +44,14 @@ Local signing uses `apksigner.jar` and `keys/wearbridge-project.p12`. The passwo
 ## Install and first run
 
 1. Install Shizuku on the watch and start it through Wireless Debugging / Wireless ADB. WearBridge does not include Shizuku.
-2. Install `wear/output/wearbridgeadb-wear.apk` on the watch and `phone/output/wearbridgeadb-phone.apk` on the phone. For example:
-
-   ```sh
-   ./install.sh wear WATCH_ADB_SERIAL
-   ./install.sh phone PHONE_ADB_SERIAL
-   ```
+2. Install the phone APK on the phone and the watch APK on the watch using any available method.
 
 3. On the watch, open WearBridgeADB, tap **Request Shizuku permission**, grant it in Shizuku, then tap **Test id**. With Shizuku started through ADB, expect `uid=2000(shell)`.
 4. Open WearBridgeADB on the phone and select NORMAL or STREAM manually. SHELL/ROOT is also a manual choice; approve the root grant on the watch when prompted.
 
 ## Set up the Termux API, step by step
 
-Follow these steps in order. You do **not** need `install.sh` to set up the API; that script is only for installing APKs through ADB.
+Follow these steps in order.
 
 ### 1. Download the client in Termux
 

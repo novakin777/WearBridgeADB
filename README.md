@@ -49,19 +49,14 @@ cd ~/wearbrdgeadb
 ## Установка и первый запуск
 
 1. Установите Shizuku на часы и запустите его через Wireless Debugging / Wireless ADB. Это отдельное приложение, APK Shizuku проект не заменяет.
-2. Установите `wear/output/wearbridgeadb-wear.apk` на часы и `phone/output/wearbridgeadb-phone.apk` на телефон. Пример с ADB serial:
-
-```sh
-./install.sh wear WATCH_ADB_SERIAL
-./install.sh phone PHONE_ADB_SERIAL
-```
+2. Установите APK телефона на телефон, а APK часов — на часы любым доступным способом.
 
 3. Откройте WearBridgeADB на часах, нажмите **Request Shizuku permission**, подтвердите разрешение в Shizuku, затем нажмите **Test id**. Проверьте строку `uid=2000(shell)`.
 4. Откройте приложение на телефоне. Статус должен показать обнаруженные часы. Выберите NORMAL или STREAM вручную. Профиль ROOT тоже включается вручную; при необходимости подтвердите root grant на часах.
 
 ## Подключить Termux API: пошагово
 
-Выполняй шаги по порядку. `install.sh` для настройки API не нужен: он относится к установке APK через ADB.
+Выполняй шаги по порядку.
 
 ### 1. Скачай клиент в Termux
 
